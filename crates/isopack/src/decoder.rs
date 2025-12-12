@@ -241,7 +241,7 @@ impl<'a> MapDecoder<'a> {
         }
 
         let mut decoder = Decoder::with_cursor(self.cursor.clone());
-        
+
         let tag = decoder.read_tag()?;
         if tag != Tag::String { return Err(Error::TypeMismatch); }
         let k_len: u32 = decoder.read_primitive()?;
@@ -437,6 +437,10 @@ impl<'a> ValueDecoder<'a> {
 
     pub fn as_bytes(&self) -> Result<&'a [u8]> {
         match self { ValueDecoder::Bytes(v) => Ok(*v), _ => Err(Error::TypeMismatch) }
+    }
+
+    pub fn as_variant(&self) -> Result<&'a str> {
+        match self { ValueDecoder::Variant(v) => Ok(*v), _ => Err(Error::TypeMismatch) }
     }
 }
 

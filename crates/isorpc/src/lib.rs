@@ -1,27 +1,25 @@
+// crates/isorpc/src/lib.rs
 //! RPC encoding for WebAssembly component model values using isopack.
-//!
-//! This crate provides:
-//! - Generic Val serialization via the IsoWriter trait
-//! - Val deserialization with Type information
-//! - RPC call/response encoding using the "Everything is a List" protocol
 
 mod decode;
 mod encode;
-mod rpc;
+mod message;
 mod types;
 
 #[cfg(test)]
 mod tests;
 
-// Re-export main RPC functions
-pub use rpc::encode_call;
-pub use rpc::encode_response_err;
-pub use rpc::encode_response_ok;
+pub use crate::types::Result;
+pub use crate::types::Error;
+pub use crate::types::MessageHeader;
 
-// Re-export RPC types
-pub use types::RpcCall;
-pub use types::RpcResponse;
+pub use crate::message::encode_call;
+pub use crate::message::encode_response_ok;
+pub use crate::message::encode_response_err;
+pub use crate::message::decode_header;
 
-// Re-export Val encoding/decoding
-pub use decode::decode_val;
-pub use encode::encode_val;
+pub use crate::encode::encode_value;
+pub use crate::encode::encode_vals;
+
+pub use crate::decode::convert_val;
+pub use crate::decode::decode_vals;

@@ -1,124 +1,158 @@
-//! Decoding of wasmtime component model values.
-
+// crates/isorpc/src/decode.rs
 use isopack::Decoder;
 use isopack::ValueDecoder;
-use isopack::types::Result;
 use wasmtime::component::Type;
 use wasmtime::component::Val;
 
-/// Decode a Val from bytes using the provided type information.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The bytes don't match the expected type
-/// - The data is malformed
-pub fn decode_val(bytes: &[u8], ty: &Type) -> Result<Val> {
-    let mut dec = Decoder::new(bytes);
-    decode_val_from_decoder(&mut dec, ty)
+use crate::types::Result;
+use crate::types::Error;
+
+/// Decodes a list of values from a ValueDecoder against a list of expected Types.
+pub fn decode_vals(val_dec: ValueDecoder, types: &[Type]) -> Result<Vec<Val>> {
+    let mut list = match val_dec {
+        ValueDecoder::List(l) => l,
+        _ => return Err(Error::TypeMismatch { expected: "List".into(), got: format!("{:?}", val_dec) }),
+    };
+
+    let mut values = Vec::with_capacity(types.len());
+
+    for ty in types {
+        let item_dec = list.next()?.ok_or_else(|| Error::Malformed("Not enough arguments".into()))?;
+        values.push(convert_val(item_dec, ty)?);
+    }
+
+    // Ensure no extra arguments
+    if list.next()?.is_some() {
+        return Err(Error::Malformed("Too many arguments".into()));
+    }
+
+    Ok(values)
 }
 
-fn decode_val_from_decoder(dec: &mut Decoder, ty: &Type) -> Result<Val> {
-    match ty {
-        Type::Bool => Ok(Val::Bool(dec.bool()?)),
-        Type::S8 => Ok(Val::S8(dec.i8()?)),
-        Type::U8 => Ok(Val::U8(dec.u8()?)),
-        Type::S16 => Ok(Val::S16(dec.i16()?)),
-        Type::U16 => Ok(Val::U16(dec.u16()?)),
-        Type::S32 => Ok(Val::S32(dec.i32()?)),
-        Type::U32 => Ok(Val::U32(dec.u32()?)),
-        Type::S64 => Ok(Val::S64(dec.i64()?)),
-        Type::U64 => Ok(Val::U64(dec.u64()?)),
-        Type::Float32 => Ok(Val::Float32(dec.f32()?)),
-        Type::Float64 => Ok(Val::Float64(dec.f64()?)),
-        Type::Char => Ok(Val::Char(char::from_u32(dec.u32()?).ok_or(isopack::types::Error::Malformed)?)),
-        Type::String => Ok(Val::String(dec.str()?.into())),
+/// Converts a generic Isopack ValueDecoder into a Wasmtime Val based on Type.
+pub fn convert_val(decoded: ValueDecoder, ty: &Type) -> Result<Val> {
+    match (decoded, ty) {
+        (ValueDecoder::Bool(b), Type::Bool) => Ok(Val::Bool(b)),
+        (ValueDecoder::S8(i), Type::S8) => Ok(Val::S8(i)),
+        (ValueDecoder::U8(u), Type::U8) => Ok(Val::U8(u)),
+        (ValueDecoder::S16(i), Type::S16) => Ok(Val::S16(i)),
+        (ValueDecoder::U16(u), Type::U16) => Ok(Val::U16(u)),
+        (ValueDecoder::S32(i), Type::S32) => Ok(Val::S32(i)),
+        (ValueDecoder::U32(u), Type::U32) => Ok(Val::U32(u)),
+        (ValueDecoder::S64(i), Type::S64) => Ok(Val::S64(i)),
+        (ValueDecoder::U64(u), Type::U64) => Ok(Val::U64(u)),
+        (ValueDecoder::F32(f), Type::Float32) => Ok(Val::Float32(f)),
+        (ValueDecoder::F64(f), Type::Float64) => Ok(Val::Float64(f)),
+        (ValueDecoder::U32(c), Type::Char) => Ok(Val::Char(char::from_u32(c).ok_or(Error::Malformed("Invalid char".into()))?)),
+        (ValueDecoder::Str(s), Type::String) => Ok(Val::String(s.to_string().into_boxed_str().to_string())),
 
-        Type::List(elem_ty) => {
-            let mut list_dec = dec.list()?;
-            let mut items = Vec::new();
-            while let Some(value_dec) = list_dec.next()? {
-                // Need to deserialize based on element type
-                // This is tricky because we've already consumed the value
-                // TODO: Need to refactor to peek at value first
-                return Err(isopack::types::Error::Malformed);
+        // Lists
+        (ValueDecoder::List(mut list), Type::List(l)) => {
+            let elem_ty = l.ty();
+            let mut vals = Vec::new();
+            while let Some(item) = list.next()? {
+                vals.push(convert_val(item, &elem_ty)?);
             }
-            Ok(Val::List(items))
+            Ok(Val::List(vals))
         }
 
-        Type::Record(_) => {
-            // TODO: Implement record deserialization
-            Err(isopack::types::Error::Malformed)
+        // Tuples
+        (ValueDecoder::List(mut list), Type::Tuple(t)) => {
+            let mut vals = Vec::new();
+            for ty in t.types() {
+                let item = list.next()?.ok_or_else(|| Error::Malformed("Tuple too short".into()))?;
+                vals.push(convert_val(item, &ty)?);
+            }
+            Ok(Val::Tuple(vals))
         }
 
-        Type::Tuple(_) => {
-            // TODO: Implement tuple deserialization  
-            Err(isopack::types::Error::Malformed)
+        // Records
+        (ValueDecoder::List(mut list), Type::Record(r)) => {
+            let mut vals = Vec::new();
+            for field in r.fields() {
+                let item = list.next()?.ok_or_else(|| Error::Malformed("Record field missing".into()))?;
+                let val = convert_val(item, &field.ty)?;
+                vals.push((field.name.to_string(), val));
+            }
+            Ok(Val::Record(vals))
         }
 
-        Type::Variant(_) => {
-            // TODO: Implement variant deserialization
-            Err(isopack::types::Error::Malformed)
-        }
-
-        Type::Enum(_) => {
-            // TODO: Implement enum deserialization
-            Err(isopack::types::Error::Malformed)
-        }
-
-        Type::Option(inner_ty) => {
-            match dec.value()? {
-                ValueDecoder::OptionNone => Ok(Val::Option(None)),
-                ValueDecoder::OptionSome => {
-                    let inner = decode_val_from_decoder(dec, inner_ty)?;
-                    Ok(Val::Option(Some(Box::new(inner))))
+        // Options
+        (ValueDecoder::Option(opt), Type::Option(o)) => {
+            match opt {
+                None => Ok(Val::Option(None)),
+                Some(boxed_dec) => {
+                    let val = convert_val(*boxed_dec, &o.ty())?;
+                    Ok(Val::Option(Some(Box::new(val))))
                 }
-                _ => Err(isopack::types::Error::TypeMismatch),
             }
         }
 
-        Type::Result(result_ty) => {
-            match dec.value()? {
-                ValueDecoder::ResultOk => {
-                    let val = if let Some(ok_ty) = result_ty.ok() {
-                        Some(Box::new(decode_val_from_decoder(dec, ok_ty)?))
+        // Results
+        (ValueDecoder::Result(res), Type::Result(r)) => {
+            match res {
+                Ok(boxed_dec) => {
+                    let val = if let Some(ok_ty) = r.ok() {
+                        Some(Box::new(convert_val(*boxed_dec, &ok_ty)?))
                     } else {
-                        match dec.value()? {
-                            ValueDecoder::Unit => None,
-                            _ => return Err(isopack::types::Error::TypeMismatch),
-                        }
+                        if !boxed_dec.is_unit() { return Err(Error::TypeMismatch { expected: "Unit".into(), got: "Value".into() }); }
+                        None
                     };
                     Ok(Val::Result(Ok(val)))
                 }
-                ValueDecoder::ResultErr => {
-                    let val = if let Some(err_ty) = result_ty.err() {
-                        Some(Box::new(decode_val_from_decoder(dec, err_ty)?))
+                Err(boxed_dec) => {
+                    let val = if let Some(err_ty) = r.err() {
+                        Some(Box::new(convert_val(*boxed_dec, &err_ty)?))
                     } else {
-                        match dec.value()? {
-                            ValueDecoder::Unit => None,
-                            _ => return Err(isopack::types::Error::TypeMismatch),
-                        }
+                        if !boxed_dec.is_unit() { return Err(Error::TypeMismatch { expected: "Unit".into(), got: "Value".into() }); }
+                        None
                     };
                     Ok(Val::Result(Err(val)))
                 }
-                _ => Err(isopack::types::Error::TypeMismatch),
             }
         }
 
-        Type::Flags(_) => {
-            // Decode flags from list of strings
-            let mut list_dec = dec.list()?;
-            let mut names = Vec::new();
-            while let Some(value_dec) = list_dec.next()? {
-                let s = value_dec.as_str()?;
-                names.push(s.into());
-            }
-            Ok(Val::Flags(names))
+        // Variants
+        (ValueDecoder::Variant(name, boxed_dec), Type::Variant(v)) => {
+            let case = v.cases().find(|c| c.name == name)
+                .ok_or_else(|| Error::Malformed(format!("Unknown variant case: {}", name)))?;
+
+            let val = if let Some(ty) = case.ty {
+                Some(Box::new(convert_val(*boxed_dec, &ty)?))
+            } else {
+                if !boxed_dec.is_unit() { return Err(Error::TypeMismatch { expected: "Unit".into(), got: "Value".into() }); }
+                None
+            };
+            Ok(Val::Variant(name.to_string(), val))
         }
 
-        Type::Own(_) | Type::Borrow(_) => {
-            // Resources cannot be deserialized
-            Err(isopack::types::Error::Malformed)
+        // Enums (Isopack Variant with Unit payload)
+        (ValueDecoder::Variant(name, boxed_dec), Type::Enum(e)) => {
+            if !e.names().any(|n| n == name) {
+                return Err(Error::Malformed(format!("Unknown enum case: {}", name)));
+            }
+            if !boxed_dec.is_unit() {
+                return Err(Error::TypeMismatch { expected: "Unit".into(), got: "Value".into() });
+            }
+            Ok(Val::Enum(name.to_string()))
         }
+
+        // Flags
+        (ValueDecoder::List(mut list), Type::Flags(f)) => {
+            let mut active = Vec::new();
+            while let Some(item) = list.next()? {
+                let s = item.as_str()?;
+                if !f.names().any(|n| n == s) {
+                    return Err(Error::Malformed(format!("Unknown flag: {}", s)));
+                }
+                active.push(s.to_string());
+            }
+            Ok(Val::Flags(active))
+        }
+
+        (dec, ty) => Err(Error::TypeMismatch {
+            expected: format!("{:?}", ty),
+            got: format!("{:?}", dec)
+        }),
     }
 }

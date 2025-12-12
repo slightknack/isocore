@@ -23,7 +23,7 @@ pub struct Encoder {
 
 impl Encoder {
     pub fn new() -> Self {
-        Self { 
+        Self {
             buf: Vec::new(),
             last_flush: 0,
             open_scopes: 0,
@@ -31,7 +31,7 @@ impl Encoder {
     }
 
     pub fn with_capacity(cap: usize) -> Self {
-        Self { 
+        Self {
             buf: Vec::with_capacity(cap),
             last_flush: 0,
             open_scopes: 0,
@@ -71,13 +71,13 @@ impl Encoder {
     /// Validates that bytes contain complete neopack messages
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self> {
         use crate::Decoder;
-        
+
         // Validate by parsing
         let mut decoder = Decoder::new(&bytes);
         while decoder.remaining() > 0 {
             decoder.skip_value()?;
         }
-        
+
         Ok(Self {
             buf: bytes,
             last_flush: 0,
@@ -191,9 +191,9 @@ impl Encoder {
     }
 
     // ADT (Algebraic Data Type) methods
-    
+
     /// Write a Unit type marker (represents empty/void value)
-    /// 
+    ///
     /// This is a complete value in itself and requires no payload.
     #[inline]
     pub fn unit(&mut self) -> Result<&mut Self> {
@@ -205,7 +205,7 @@ impl Encoder {
     }
 
     /// Write an Option::Some discriminant and return a payload encoder
-    /// 
+    ///
     /// The returned `ValueEncoder` should have exactly one value written to it.
     /// Example:
     /// ```ignore
@@ -222,7 +222,7 @@ impl Encoder {
     }
 
     /// Write an Option::None discriminant
-    /// 
+    ///
     /// This is a complete value in itself and requires no payload.
     #[inline]
     pub fn option_none(&mut self) -> Result<&mut Self> {
@@ -234,7 +234,7 @@ impl Encoder {
     }
 
     /// Write a Result::Ok discriminant and return a payload encoder
-    /// 
+    ///
     /// The returned `ValueEncoder` should have exactly one value written to it.
     /// Example:
     /// ```ignore
@@ -251,7 +251,7 @@ impl Encoder {
     }
 
     /// Write a Result::Err discriminant and return a payload encoder
-    /// 
+    ///
     /// The returned `ValueEncoder` should have exactly one value written to it.
     /// Example:
     /// ```ignore
@@ -268,13 +268,13 @@ impl Encoder {
     }
 
     /// Write a Variant discriminant with name and return a payload encoder
-    /// 
+    ///
     /// The returned `ValueEncoder` should have exactly one value written to it.
     /// For unit variants, write `unit()`. Example:
     /// ```ignore
     /// // Variant with payload
     /// encoder.variant("Error")?.str("message")?;
-    /// 
+    ///
     /// // Unit variant
     /// encoder.variant("Success")?.unit()?;
     /// ```
@@ -406,12 +406,12 @@ impl<'a> MapEncoder<'a> {
 }
 
 /// Single-value encoder used for map values and ADT payloads
-/// 
+///
 /// This encoder enforces that exactly one value should be written before
 /// continuing. It's used in two contexts:
 /// - After `MapEncoder::key()` - to write the corresponding value
 /// - After ADT discriminants like `option_some()`, `result_ok()`, `variant()` - to write the payload
-/// 
+///
 /// The `#[must_use]` attribute ensures the compiler warns if you don't write a value.
 /// While the type system doesn't enforce exactly one write, the API design and
 /// documentation make the intent clear.
@@ -427,7 +427,7 @@ impl<'a> ValueEncoder<'a> {
 
     // Delegate all methods to parent encoder
     // We can't use encode_wrapper_api macro here due to lifetime issues
-    
+
     pub fn bool(&mut self, v: bool) -> Result<&mut Self> { self.parent.bool(v)?; Ok(self) }
     pub fn u8(&mut self, v: u8) -> Result<&mut Self> { self.parent.u8(v)?; Ok(self) }
     pub fn i8(&mut self, v: i8) -> Result<&mut Self> { self.parent.i8(v)?; Ok(self) }
@@ -442,15 +442,15 @@ impl<'a> ValueEncoder<'a> {
     pub fn str(&mut self, v: &str) -> Result<&mut Self> { self.parent.str(v)?; Ok(self) }
     pub fn bytes(&mut self, v: &[u8]) -> Result<&mut Self> { self.parent.bytes(v)?; Ok(self) }
     pub fn record_raw(&mut self, v: &[u8]) -> Result<&mut Self> { self.parent.record_raw(v)?; Ok(self) }
-    
+
     pub fn unit(&mut self) -> Result<&mut Self> { self.parent.unit()?; Ok(self) }
     pub fn option_none(&mut self) -> Result<&mut Self> { self.parent.option_none()?; Ok(self) }
-    
+
     pub fn list(&mut self) -> Result<ListEncoder<'_>> { self.parent.list() }
     pub fn map(&mut self) -> Result<MapEncoder<'_>> { self.parent.map() }
     pub fn array(&mut self, tag: Tag, stride: usize) -> Result<ArrayEncoder<'_>> { self.parent.array(tag, stride) }
     pub fn record(&mut self) -> Result<RecordEncoder<'_>> { self.parent.record() }
-    
+
     pub fn variant(&mut self, name: &str) -> Result<ValueEncoder<'_>> { self.parent.variant(name) }
     pub fn option_some(&mut self) -> Result<ValueEncoder<'_>> { self.parent.option_some() }
     pub fn result_ok(&mut self) -> Result<ValueEncoder<'_>> { self.parent.result_ok() }
@@ -611,37 +611,14 @@ impl IsoWriter for Encoder {
 
     impl_isowriter_delegate!();
 
-    fn option_some(&mut self) -> Result<ValueEncoder<'_>> {
-        Encoder::option_some(self)
-    }
-
-    fn result_ok(&mut self) -> Result<ValueEncoder<'_>> {
-        Encoder::result_ok(self)
-    }
-
-    fn result_err(&mut self) -> Result<ValueEncoder<'_>> {
-        Encoder::result_err(self)
-    }
-
-    fn variant(&mut self, tag: &str) -> Result<ValueEncoder<'_>> {
-        Encoder::variant(self, tag)
-    }
-
-    fn list(&mut self) -> Result<ListEncoder<'_>> {
-        Encoder::list(self)
-    }
-
-    fn map(&mut self) -> Result<MapEncoder<'_>> {
-        Encoder::map(self)
-    }
-
-    fn array(&mut self, tag: Tag, stride: usize) -> Result<ArrayEncoder<'_>> {
-        Encoder::array(self, tag, stride)
-    }
-
-    fn finish(self) -> Result<()> {
-        Ok(())
-    }
+    fn option_some(&mut self) -> Result<ValueEncoder<'_>> { Encoder::option_some(self) }
+    fn result_ok(&mut self) -> Result<ValueEncoder<'_>> { Encoder::result_ok(self) }
+    fn result_err(&mut self) -> Result<ValueEncoder<'_>> { Encoder::result_err(self) }
+    fn variant(&mut self, tag: &str) -> Result<ValueEncoder<'_>> { Encoder::variant(self, tag) }
+    fn list(&mut self) -> Result<ListEncoder<'_>> { Encoder::list(self) }
+    fn map(&mut self) -> Result<MapEncoder<'_>> { Encoder::map(self) }
+    fn array(&mut self, tag: Tag, stride: usize) -> Result<ArrayEncoder<'_>> { Encoder::array(self, tag, stride) }
+    fn finish(self) -> Result<()> { Ok(()) }
 }
 
 impl<'a> IsoWriter for ListEncoder<'a> {
@@ -652,33 +629,13 @@ impl<'a> IsoWriter for ListEncoder<'a> {
 
     impl_isowriter_delegate!();
 
-    fn option_some(&mut self) -> Result<ValueEncoder<'_>> {
-        ListEncoder::option_some(self)
-    }
-
-    fn result_ok(&mut self) -> Result<ValueEncoder<'_>> {
-        ListEncoder::result_ok(self)
-    }
-
-    fn result_err(&mut self) -> Result<ValueEncoder<'_>> {
-        ListEncoder::result_err(self)
-    }
-
-    fn variant(&mut self, tag: &str) -> Result<ValueEncoder<'_>> {
-        ListEncoder::variant(self, tag)
-    }
-
-    fn list(&mut self) -> Result<ListEncoder<'_>> {
-        ListEncoder::list(self)
-    }
-
-    fn map(&mut self) -> Result<MapEncoder<'_>> {
-        ListEncoder::map(self)
-    }
-
-    fn array(&mut self, tag: Tag, stride: usize) -> Result<ArrayEncoder<'_>> {
-        ListEncoder::array(self, tag, stride)
-    }
+    fn option_some(&mut self) -> Result<ValueEncoder<'_>> { ListEncoder::option_some(self) }
+    fn result_ok(&mut self) -> Result<ValueEncoder<'_>> { ListEncoder::result_ok(self) }
+    fn result_err(&mut self) -> Result<ValueEncoder<'_>> { ListEncoder::result_err(self) }
+    fn variant(&mut self, tag: &str) -> Result<ValueEncoder<'_>> { ListEncoder::variant(self, tag) }
+    fn list(&mut self) -> Result<ListEncoder<'_>> { ListEncoder::list(self) }
+    fn map(&mut self) -> Result<MapEncoder<'_>> { ListEncoder::map(self) }
+    fn array(&mut self, tag: Tag, stride: usize) -> Result<ArrayEncoder<'_>> { ListEncoder::array(self, tag, stride) }
 
     fn finish(self) -> Result<()> {
         self.scope.finish()?;
@@ -694,33 +651,13 @@ impl<'a> IsoWriter for ValueEncoder<'a> {
 
     impl_isowriter_delegate!(parent);
 
-    fn option_some(&mut self) -> Result<ValueEncoder<'_>> {
-        self.parent.option_some()
-    }
-
-    fn result_ok(&mut self) -> Result<ValueEncoder<'_>> {
-        self.parent.result_ok()
-    }
-
-    fn result_err(&mut self) -> Result<ValueEncoder<'_>> {
-        self.parent.result_err()
-    }
-
-    fn variant(&mut self, tag: &str) -> Result<ValueEncoder<'_>> {
-        self.parent.variant(tag)
-    }
-
-    fn list(&mut self) -> Result<ListEncoder<'_>> {
-        self.parent.list()
-    }
-
-    fn map(&mut self) -> Result<MapEncoder<'_>> {
-        self.parent.map()
-    }
-
-    fn array(&mut self, tag: Tag, stride: usize) -> Result<ArrayEncoder<'_>> {
-        self.parent.array(tag, stride)
-    }
+    fn option_some(&mut self) -> Result<ValueEncoder<'_>> {self.parent.option_some()}
+    fn result_ok(&mut self) -> Result<ValueEncoder<'_>> {self.parent.result_ok()}
+    fn result_err(&mut self) -> Result<ValueEncoder<'_>> {self.parent.result_err()}
+    fn variant(&mut self, tag: &str) -> Result<ValueEncoder<'_>> {self.parent.variant(tag)}
+    fn list(&mut self) -> Result<ListEncoder<'_>> {self.parent.list()}
+    fn map(&mut self) -> Result<MapEncoder<'_>> {self.parent.map()}
+    fn array(&mut self, tag: Tag, stride: usize) -> Result<ArrayEncoder<'_>> {self.parent.array(tag, stride)}
 
     fn finish(self) -> Result<()> {
         Ok(())

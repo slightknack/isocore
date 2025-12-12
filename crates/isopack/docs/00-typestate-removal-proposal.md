@@ -1,4 +1,5 @@
 <!-- generated -->
+<!-- 2025-12-12 -->
 
 Here is the comprehensive implementation plan to radically simplify `isopack`. This moves from a **Type-State/Guard** architecture to a **Runtime State Machine** architecture.
 
