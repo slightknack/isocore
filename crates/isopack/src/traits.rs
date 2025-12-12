@@ -5,7 +5,7 @@ use crate::types::Result;
 
 /// The unified interface for writing Isopack values.
 ///
-/// This trait is implemented by Encoder, ListEncoder, MapValueEncoder, and other
+/// This trait is implemented by Encoder, ListEncoder, ValueEncoder, and other
 /// writer types, allowing generic code to write values in any context.
 pub trait IsoWriter {
     /// Target type for list contexts
@@ -20,6 +20,11 @@ pub trait IsoWriter {
 
     /// Target type for array contexts
     type ArrayTarget<'a>: IsoArrayWriter
+    where
+        Self: 'a;
+
+    /// Target type for ADT payload contexts (Option::Some, Result, Variant)
+    type AdtTarget<'a>: IsoWriter
     where
         Self: 'a;
 
@@ -39,13 +44,15 @@ pub trait IsoWriter {
     fn bytes(&mut self, v: &[u8]) -> Result<()>;
     fn record_raw(&mut self, v: &[u8]) -> Result<()>;
 
-    // ADTs (Algebraic Data Types) - only unit types that don't need payloads
+    // ADTs (Algebraic Data Types) - unit types that don't need payloads
     fn unit(&mut self) -> Result<()>;
     fn option_none(&mut self) -> Result<()>;
-    
-    // Note: option_some, result_ok, result_err, and variant are not part of the trait
-    // because they return ValueEncoder to enforce payload writing at compile-time.
-    // They're available as inherent methods on Encoder, ListEncoder, etc.
+
+    // ADTs with payloads - return AdtTarget for writing exactly one value
+    fn option_some(&mut self) -> Result<Self::AdtTarget<'_>>;
+    fn result_ok(&mut self) -> Result<Self::AdtTarget<'_>>;
+    fn result_err(&mut self) -> Result<Self::AdtTarget<'_>>;
+    fn variant(&mut self, tag: &str) -> Result<Self::AdtTarget<'_>>;
 
     // Containers
     fn list(&mut self) -> Result<Self::ListTarget<'_>>;

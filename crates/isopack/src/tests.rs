@@ -1,12 +1,11 @@
-use super::Result;
-use super::Location;
-use super::Encoder;
 use super::Decoder;
-use super::Cursor;
-use crate::types::Error;
-use crate::types::Tag;
+use super::Encoder;
+use super::Result;
 use crate::RecordDecoder;
 use crate::ValueDecoder;
+use crate::traits::IsoWriter;
+use crate::types::Error;
+use crate::types::Tag;
 
 type R<T> = Result<T>;
 
@@ -20,6 +19,46 @@ fn test_bool_roundtrip() -> R<()> {
     let mut r = Decoder::new(bytes);
     assert_eq!(r.bool()?, true);
     assert_eq!(r.bool()?, false);
+    Ok(())
+}
+
+#[test]
+fn test_map_key_length_limit() -> R<()> {
+    let mut enc = Encoder::new();
+    let mut map = enc.map()?;
+    
+    // 32 bytes should work
+    let key_32 = "a".repeat(32);
+    map.key(&key_32)?.u32(1)?;
+    
+    // 33 bytes should fail
+    let key_33 = "a".repeat(33);
+    match map.key(&key_33) {
+        Err(Error::BlobTooLarge(33)) => {}
+        _ => panic!("Expected BlobTooLarge error for 33-byte key"),
+    }
+    
+    Ok(())
+}
+
+#[test]
+fn test_variant_name_length_limit() -> R<()> {
+    let mut enc = Encoder::new();
+    
+    // 32 bytes should work
+    let name_32 = "a".repeat(32);
+    let mut payload = enc.variant(&name_32)?;
+    payload.unit()?;
+    payload.finish()?;
+    
+    // 33 bytes should fail
+    let mut enc2 = Encoder::new();
+    let name_33 = "a".repeat(33);
+    match enc2.variant(&name_33) {
+        Err(Error::BlobTooLarge(33)) => {}
+        _ => panic!("Expected BlobTooLarge error for 33-byte variant name"),
+    }
+    
     Ok(())
 }
 
@@ -669,7 +708,8 @@ fn test_map_nested() -> R<()> {
     let mut map = enc.map()?;
     map.key("outer")?.u32(1)?;
 
-    let mut inner = map.key("inner")?.map()?;
+    let mut val = map.key("inner")?;
+    let mut inner = val.map()?;
     inner.key("nested")?.u32(2)?;
     inner.finish()?;
 
@@ -859,13 +899,15 @@ fn test_complex_structure() -> R<()> {
     root_map.key("id")?.u64(12345)?;
     root_map.key("name")?.str("test")?;
 
-    let mut tags = root_map.key("tags")?.list()?;
+    let mut val = root_map.key("tags")?;
+    let mut tags = val.list()?;
     tags.str("rust")?;
     tags.str("binary")?;
     tags.str("serialization")?;
     tags.finish()?;
 
-    let mut meta = root_map.key("metadata")?.map()?;
+    let mut val = root_map.key("metadata")?;
+    let mut meta = val.map()?;
     meta.key("version")?.u32(1)?;
     meta.key("active")?.bool(true)?;
     meta.finish()?;
@@ -1031,7 +1073,8 @@ fn test_mixed_container_types() -> R<()> {
     let mut list = enc.list()?;
 
     let mut map = list.map()?;
-    let mut coords = map.key("coords")?.list()?;
+    let mut val = map.key("coords")?;
+    let mut coords = val.list()?;
     coords.u16(100)?.u16(200)?;
     coords.finish()?;
     map.finish()?;
@@ -1225,5 +1268,275 @@ fn test_array_of_structs_layout() -> R<()> {
         assert_eq!(r2.u32()?, 20);
     } else { panic!("Expected Struct"); }
 
+    Ok(())
+}
+
+// ADT (Algebraic Data Type) Tests
+
+#[test]
+fn test_adt_option_some() -> R<()> {
+    let mut enc = Encoder::new();
+    let mut payload = enc.option_some()?;
+    payload.u32(42)?;
+    payload.finish()?;
+
+    let bytes = enc.as_bytes();
+    let mut dec = Decoder::new(&bytes);
+    match dec.value()? {
+        ValueDecoder::OptionSome => {
+            assert_eq!(dec.value()?.as_u32()?, 42);
+        }
+        _ => panic!("Expected OptionSome"),
+    }
+    Ok(())
+}
+
+#[test]
+fn test_adt_option_none() -> R<()> {
+    let mut enc = Encoder::new();
+    enc.option_none()?;
+
+    let bytes = enc.as_bytes();
+    let mut dec = Decoder::new(&bytes);
+    match dec.value()? {
+        ValueDecoder::OptionNone => {}
+        _ => panic!("Expected OptionNone"),
+    }
+    Ok(())
+}
+
+#[test]
+fn test_adt_result_ok_with_value() -> R<()> {
+    let mut enc = Encoder::new();
+    let mut payload = enc.result_ok()?;
+    payload.str("success")?;
+    payload.finish()?;
+
+    let bytes = enc.as_bytes();
+    let mut dec = Decoder::new(&bytes);
+    match dec.value()? {
+        ValueDecoder::ResultOk => {
+            assert_eq!(dec.value()?.as_str()?, "success");
+        }
+        _ => panic!("Expected ResultOk"),
+    }
+    Ok(())
+}
+
+#[test]
+fn test_adt_result_ok_unit() -> R<()> {
+    let mut enc = Encoder::new();
+    let mut payload = enc.result_ok()?;
+    payload.unit()?;
+    payload.finish()?;
+
+    let bytes = enc.as_bytes();
+    let mut dec = Decoder::new(&bytes);
+    match dec.value()? {
+        ValueDecoder::ResultOk => {
+            match dec.value()? {
+                ValueDecoder::Unit => {}
+                _ => panic!("Expected Unit"),
+            }
+        }
+        _ => panic!("Expected ResultOk"),
+    }
+    Ok(())
+}
+
+#[test]
+fn test_adt_result_err() -> R<()> {
+    let mut enc = Encoder::new();
+    let mut payload = enc.result_err()?;
+    payload.str("error message")?;
+    payload.finish()?;
+
+    let bytes = enc.as_bytes();
+    let mut dec = Decoder::new(&bytes);
+    match dec.value()? {
+        ValueDecoder::ResultErr => {
+            assert_eq!(dec.value()?.as_str()?, "error message");
+        }
+        _ => panic!("Expected ResultErr"),
+    }
+    Ok(())
+}
+
+#[test]
+fn test_adt_variant_with_payload() -> R<()> {
+    let mut enc = Encoder::new();
+    let mut payload = enc.variant("Success")?;
+    payload.u64(12345)?;
+    payload.finish()?;
+
+    let bytes = enc.as_bytes();
+    let mut dec = Decoder::new(&bytes);
+    match dec.value()? {
+        ValueDecoder::Variant(tag) => {
+            assert_eq!(tag, "Success");
+            assert_eq!(dec.value()?.as_u64()?, 12345);
+        }
+        _ => panic!("Expected Variant"),
+    }
+    Ok(())
+}
+
+#[test]
+fn test_adt_variant_unit() -> R<()> {
+    let mut enc = Encoder::new();
+    let mut payload = enc.variant("Empty")?;
+    payload.unit()?;
+    payload.finish()?;
+
+    let bytes = enc.as_bytes();
+    let mut dec = Decoder::new(&bytes);
+    match dec.value()? {
+        ValueDecoder::Variant(tag) => {
+            assert_eq!(tag, "Empty");
+            match dec.value()? {
+                ValueDecoder::Unit => {}
+                _ => panic!("Expected Unit"),
+            }
+        }
+        _ => panic!("Expected Variant"),
+    }
+    Ok(())
+}
+
+#[test]
+fn test_adt_nested_in_list() -> R<()> {
+    let mut enc = Encoder::new();
+    let mut list = enc.list()?;
+    
+    // Option::Some(10)
+    let mut val = list.option_some()?;
+    val.u32(10)?;
+    val.finish()?;
+    
+    // Option::None
+    list.option_none()?;
+    
+    // Result::Ok(20)
+    let mut val = list.result_ok()?;
+    val.u32(20)?;
+    val.finish()?;
+    
+    list.finish()?;
+
+    let bytes = enc.as_bytes();
+    let mut dec = Decoder::new(&bytes);
+    let mut list = dec.list()?;
+    
+    match list.next()?.unwrap() {
+        ValueDecoder::OptionSome => {
+            assert_eq!(list.next()?.unwrap().as_u32()?, 10);
+        }
+        _ => panic!("Expected OptionSome"),
+    }
+    
+    match list.next()?.unwrap() {
+        ValueDecoder::OptionNone => {}
+        _ => panic!("Expected OptionNone"),
+    }
+    
+    match list.next()?.unwrap() {
+        ValueDecoder::ResultOk => {
+            assert_eq!(list.next()?.unwrap().as_u32()?, 20);
+        }
+        _ => panic!("Expected ResultOk"),
+    }
+    
+    Ok(())
+}
+
+#[test]
+fn test_adt_option_with_complex_payload() -> R<()> {
+    let mut enc = Encoder::new();
+    let mut payload = enc.option_some()?;
+    
+    // Payload is a list of values
+    let mut inner_list = payload.list()?;
+    inner_list.u32(1)?;
+    inner_list.u32(2)?;
+    inner_list.u32(3)?;
+    inner_list.finish()?;
+    
+    payload.finish()?;
+
+    let bytes = enc.as_bytes();
+    let mut dec = Decoder::new(&bytes);
+    
+    match dec.value()? {
+        ValueDecoder::OptionSome => {
+            let mut list = dec.list()?;
+            assert_eq!(list.next()?.unwrap().as_u32()?, 1);
+            assert_eq!(list.next()?.unwrap().as_u32()?, 2);
+            assert_eq!(list.next()?.unwrap().as_u32()?, 3);
+        }
+        _ => panic!("Expected OptionSome"),
+    }
+    
+    Ok(())
+}
+
+#[test]
+fn test_adt_using_trait() -> R<()> {
+    use crate::traits::IsoWriter;
+    
+    fn write_option_some<W: IsoWriter>(writer: &mut W, value: u32) -> R<()> {
+        let mut payload = writer.option_some()?;
+        payload.u32(value)?;
+        payload.finish()?;
+        Ok(())
+    }
+    
+    let mut enc = Encoder::new();
+    write_option_some(&mut enc, 99)?;
+    
+    let bytes = enc.as_bytes();
+    let mut dec = Decoder::new(&bytes);
+    
+    match dec.value()? {
+        ValueDecoder::OptionSome => {
+            assert_eq!(dec.value()?.as_u32()?, 99);
+        }
+        _ => panic!("Expected OptionSome"),
+    }
+    
+    Ok(())
+}
+
+#[test]
+fn test_adt_trait_generic_recursion() -> R<()> {
+    use crate::traits::IsoWriter;
+    
+    // Generic function that writes nested ADTs
+    fn write_nested_result<W: IsoWriter>(writer: &mut W) -> R<()> {
+        let mut outer = writer.result_ok()?;
+        let mut inner = outer.option_some()?;
+        inner.u64(42)?;
+        inner.finish()?;
+        outer.finish()?;
+        Ok(())
+    }
+    
+    let mut enc = Encoder::new();
+    write_nested_result(&mut enc)?;
+    
+    let bytes = enc.as_bytes();
+    let mut dec = Decoder::new(&bytes);
+    
+    match dec.value()? {
+        ValueDecoder::ResultOk => {
+            match dec.value()? {
+                ValueDecoder::OptionSome => {
+                    assert_eq!(dec.value()?.as_u64()?, 42);
+                }
+                _ => panic!("Expected OptionSome"),
+            }
+        }
+        _ => panic!("Expected ResultOk"),
+    }
+    
     Ok(())
 }

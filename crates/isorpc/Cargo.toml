@@ -1,0 +1,9 @@
+[package]
+name = "isorpc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# NOTE: For shared dependencies, add to [workspace.dependencies] in root Cargo.toml and use { workspace = true }
+isopack = { path = "../isopack" }
+wasmtime = { workspace = true }

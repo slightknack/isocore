@@ -78,3 +78,24 @@ pub enum Error {
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::Pending(n) => write!(f, "Pending: need {} more bytes", n),
+            Error::InvalidTag(tag) => write!(f, "Invalid tag: {:#x}", tag),
+            Error::InvalidUtf8 => write!(f, "Invalid UTF-8 encoding"),
+            Error::TypeMismatch => write!(f, "Type mismatch"),
+            Error::Malformed => write!(f, "Malformed data"),
+            Error::BlobTooLarge(size) => write!(f, "Blob too large: {} bytes", size),
+            Error::ContainerFull => write!(f, "Container full"),
+            Error::SeekBeforeBuffer => write!(f, "Seek before buffer"),
+            Error::SeekAfterBuffer => write!(f, "Seek after buffer"),
+            Error::ScopeOpen => write!(f, "Scope still open"),
+            Error::PositionFreed => write!(f, "Position freed"),
+            Error::OutOfBounds => write!(f, "Out of bounds"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}

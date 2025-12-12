@@ -121,30 +121,13 @@ macro_rules! encode_wrapper_api {
             Ok($post)
         }
 
-        pub fn option_some($($recv)+) -> crate::types::Result<$ret_ty> {
-            $pre
-            $parent.option_some()?;
-            Ok($post)
-        }
-
         pub fn option_none($($recv)+) -> crate::types::Result<$ret_ty> {
             $pre
             $parent.option_none()?;
             Ok($post)
         }
 
-        pub fn result_ok($($recv)+) -> crate::types::Result<$ret_ty> {
-            $pre
-            $parent.result_ok()?;
-            Ok($post)
-        }
-
-        pub fn result_err($($recv)+) -> crate::types::Result<$ret_ty> {
-            $pre
-            $parent.result_err()?;
-            Ok($post)
-        }
-
+        // Methods that return ValueEncoder for payload enforcement
         pub fn variant($($recv)+, name: &str) -> crate::types::Result<ValueEncoder<$lt>> {
             $pre
             $parent.variant(name)

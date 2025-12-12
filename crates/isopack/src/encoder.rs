@@ -283,8 +283,13 @@ impl Encoder {
         if self.buf.len() >= u32::MAX as usize {
             return Err(Error::ContainerFull);
         }
+        let name_bytes = name.as_bytes();
+        if name_bytes.len() > 32 {
+            return Err(Error::BlobTooLarge(name_bytes.len()));
+        }
         self.write_tag(Tag::Variant);
-        self.write_blob(Tag::String, name.as_bytes())?;
+        self.write_u32_raw(name_bytes.len() as u32);
+        self.buf.extend_from_slice(name_bytes);
         Ok(ValueEncoder::new(self))
     }
 
@@ -386,6 +391,9 @@ impl<'a> MapEncoder<'a> {
 
     #[must_use]
     pub fn key(&mut self, k: &str) -> Result<MapValueEncoder<'_>> {
+        if k.as_bytes().len() > 32 {
+            return Err(Error::BlobTooLarge(k.as_bytes().len()));
+        }
         self.scope.parent.str(k)?;
         Ok(MapValueEncoder {
             parent: self.scope.parent,
@@ -417,11 +425,36 @@ impl<'a> ValueEncoder<'a> {
         Self { parent }
     }
 
-    encode_wrapper_api!([&mut self], &mut Self, 'a;
-        parent: self.parent;
-        pre: {};
-        post: self
-    );
+    // Delegate all methods to parent encoder
+    // We can't use encode_wrapper_api macro here due to lifetime issues
+    
+    pub fn bool(&mut self, v: bool) -> Result<&mut Self> { self.parent.bool(v)?; Ok(self) }
+    pub fn u8(&mut self, v: u8) -> Result<&mut Self> { self.parent.u8(v)?; Ok(self) }
+    pub fn i8(&mut self, v: i8) -> Result<&mut Self> { self.parent.i8(v)?; Ok(self) }
+    pub fn u16(&mut self, v: u16) -> Result<&mut Self> { self.parent.u16(v)?; Ok(self) }
+    pub fn i16(&mut self, v: i16) -> Result<&mut Self> { self.parent.i16(v)?; Ok(self) }
+    pub fn u32(&mut self, v: u32) -> Result<&mut Self> { self.parent.u32(v)?; Ok(self) }
+    pub fn i32(&mut self, v: i32) -> Result<&mut Self> { self.parent.i32(v)?; Ok(self) }
+    pub fn u64(&mut self, v: u64) -> Result<&mut Self> { self.parent.u64(v)?; Ok(self) }
+    pub fn i64(&mut self, v: i64) -> Result<&mut Self> { self.parent.i64(v)?; Ok(self) }
+    pub fn f32(&mut self, v: f32) -> Result<&mut Self> { self.parent.f32(v)?; Ok(self) }
+    pub fn f64(&mut self, v: f64) -> Result<&mut Self> { self.parent.f64(v)?; Ok(self) }
+    pub fn str(&mut self, v: &str) -> Result<&mut Self> { self.parent.str(v)?; Ok(self) }
+    pub fn bytes(&mut self, v: &[u8]) -> Result<&mut Self> { self.parent.bytes(v)?; Ok(self) }
+    pub fn record_raw(&mut self, v: &[u8]) -> Result<&mut Self> { self.parent.record_raw(v)?; Ok(self) }
+    
+    pub fn unit(&mut self) -> Result<&mut Self> { self.parent.unit()?; Ok(self) }
+    pub fn option_none(&mut self) -> Result<&mut Self> { self.parent.option_none()?; Ok(self) }
+    
+    pub fn list(&mut self) -> Result<ListEncoder<'_>> { self.parent.list() }
+    pub fn map(&mut self) -> Result<MapEncoder<'_>> { self.parent.map() }
+    pub fn array(&mut self, tag: Tag, stride: usize) -> Result<ArrayEncoder<'_>> { self.parent.array(tag, stride) }
+    pub fn record(&mut self) -> Result<RecordEncoder<'_>> { self.parent.record() }
+    
+    pub fn variant(&mut self, name: &str) -> Result<ValueEncoder<'_>> { self.parent.variant(name) }
+    pub fn option_some(&mut self) -> Result<ValueEncoder<'_>> { self.parent.option_some() }
+    pub fn result_ok(&mut self) -> Result<ValueEncoder<'_>> { self.parent.result_ok() }
+    pub fn result_err(&mut self) -> Result<ValueEncoder<'_>> { self.parent.result_err() }
 }
 
 // Type alias for backwards compatibility in map context
@@ -574,8 +607,25 @@ impl IsoWriter for Encoder {
     type ListTarget<'a> = ListEncoder<'a>;
     type MapTarget<'a> = MapEncoder<'a>;
     type ArrayTarget<'a> = ArrayEncoder<'a>;
+    type AdtTarget<'a> = ValueEncoder<'a>;
 
     impl_isowriter_delegate!();
+
+    fn option_some(&mut self) -> Result<ValueEncoder<'_>> {
+        Encoder::option_some(self)
+    }
+
+    fn result_ok(&mut self) -> Result<ValueEncoder<'_>> {
+        Encoder::result_ok(self)
+    }
+
+    fn result_err(&mut self) -> Result<ValueEncoder<'_>> {
+        Encoder::result_err(self)
+    }
+
+    fn variant(&mut self, tag: &str) -> Result<ValueEncoder<'_>> {
+        Encoder::variant(self, tag)
+    }
 
     fn list(&mut self) -> Result<ListEncoder<'_>> {
         Encoder::list(self)
@@ -598,8 +648,25 @@ impl<'a> IsoWriter for ListEncoder<'a> {
     type ListTarget<'b> = ListEncoder<'b> where 'a: 'b;
     type MapTarget<'b> = MapEncoder<'b> where 'a: 'b;
     type ArrayTarget<'b> = ArrayEncoder<'b> where 'a: 'b;
+    type AdtTarget<'b> = ValueEncoder<'b> where 'a: 'b;
 
     impl_isowriter_delegate!();
+
+    fn option_some(&mut self) -> Result<ValueEncoder<'_>> {
+        ListEncoder::option_some(self)
+    }
+
+    fn result_ok(&mut self) -> Result<ValueEncoder<'_>> {
+        ListEncoder::result_ok(self)
+    }
+
+    fn result_err(&mut self) -> Result<ValueEncoder<'_>> {
+        ListEncoder::result_err(self)
+    }
+
+    fn variant(&mut self, tag: &str) -> Result<ValueEncoder<'_>> {
+        ListEncoder::variant(self, tag)
+    }
 
     fn list(&mut self) -> Result<ListEncoder<'_>> {
         ListEncoder::list(self)
@@ -623,8 +690,25 @@ impl<'a> IsoWriter for ValueEncoder<'a> {
     type ListTarget<'b> = ListEncoder<'b> where 'a: 'b;
     type MapTarget<'b> = MapEncoder<'b> where 'a: 'b;
     type ArrayTarget<'b> = ArrayEncoder<'b> where 'a: 'b;
+    type AdtTarget<'b> = ValueEncoder<'b> where 'a: 'b;
 
     impl_isowriter_delegate!(parent);
+
+    fn option_some(&mut self) -> Result<ValueEncoder<'_>> {
+        self.parent.option_some()
+    }
+
+    fn result_ok(&mut self) -> Result<ValueEncoder<'_>> {
+        self.parent.result_ok()
+    }
+
+    fn result_err(&mut self) -> Result<ValueEncoder<'_>> {
+        self.parent.result_err()
+    }
+
+    fn variant(&mut self, tag: &str) -> Result<ValueEncoder<'_>> {
+        self.parent.variant(tag)
+    }
 
     fn list(&mut self) -> Result<ListEncoder<'_>> {
         self.parent.list()

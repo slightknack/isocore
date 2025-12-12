@@ -1,124 +1,145 @@
-//! RPC serialization and deserialization using isopack
+//! RPC types and serialization for isorun.
+//!
+//! RPC protocol uses the "Everything is a List" encoding from isorpc:
+//! - RpcCall: [seq, func_name, [args...]]
+//! - RpcResponse: [seq, Result<val, error>]
 
+use anyhow::Context;
 use anyhow::Result;
 use isopack::Decoder;
 use isopack::Encoder;
+use isopack::ValueDecoder;
+use isorpc::serialize_val;
+use wasmtime::component::Val;
 
-// Extension trait to convert isopack::Result to anyhow::Result
-trait IsopackResultExt<T> {
-    fn ctx(self) -> Result<T>;
-}
-
-impl<T> IsopackResultExt<T> for isopack::Result<T> {
-    fn ctx(self) -> Result<T> {
-        self.map_err(|e| anyhow::anyhow!("Isopack error: {:?}", e))
-    }
-}
-
-/// RPC call payload structure
-#[derive(Debug, Clone, PartialEq)]
+/// RPC call structure
+#[derive(Debug, Clone)]
 pub struct RpcCall {
-    /// The remote instance identifier
-    pub remote_instance: String,
-    /// The interface name (e.g., "test:demo/math")
-    pub interface: String,
-    /// The function name (e.g., "add")
+    /// Sequence number for matching requests and responses
+    pub seq: u64,
+    /// Function name to call
     pub function: String,
-    /// The serialized arguments
-    pub args: Vec<u8>,
+    /// Function arguments
+    pub args: Vec<Val>,
 }
 
 impl RpcCall {
     /// Create a new RPC call
-    pub fn new(remote_instance: String, interface: String, function: String, args: Vec<u8>) -> Self {
-        Self {
-            remote_instance,
-            interface,
-            function,
-            args,
+    pub fn new(seq: u64, function: String, args: Vec<Val>) -> Self {
+        Self { seq, function, args }
+    }
+
+    /// Encode the RPC call to bytes
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        isorpc::encode_call(self.seq, &self.function, &self.args)
+            .context("Failed to encode RPC call")
+    }
+
+    /// Decode an RPC call from bytes
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let mut dec = Decoder::new(bytes);
+        let mut list = dec.list().context("Expected list for RPC call")?;
+
+        // Sequence number
+        let seq = list
+            .next()
+            .context("Missing sequence number")??
+            .as_u64()
+            .context("Sequence number must be u64")?;
+
+        // Function name
+        let function = list
+            .next()
+            .context("Missing function name")??
+            .as_str()
+            .context("Function name must be string")?
+            .to_string();
+
+        // Arguments list
+        let mut args_list = match list.next().context("Missing arguments list")?? {
+            ValueDecoder::List(l) => l,
+            _ => anyhow::bail!("Arguments must be a list"),
+        };
+
+        let mut args = Vec::new();
+        while let Some(value_dec) = args_list.next()? {
+            // TODO: Implement Val deserialization
+            // For now, we'll need to add a decode_val function
+            anyhow::bail!("Val deserialization not yet implemented");
         }
-    }
 
-    /// Serialize the RPC call to bytes using isopack
-    pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let mut encoder = Encoder::new();
-        encoder.str(&self.remote_instance).ctx()?;
-        encoder.str(&self.interface).ctx()?;
-        encoder.str(&self.function).ctx()?;
-        encoder.bytes(&self.args).ctx()?;
-        Ok(encoder.into_bytes())
-    }
-
-    /// Deserialize an RPC call from bytes using isopack
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let mut decoder = Decoder::new(bytes);
-        let remote_instance = decoder.str().ctx()?.to_string();
-        let interface = decoder.str().ctx()?.to_string();
-        let function = decoder.str().ctx()?.to_string();
-        let args = decoder.bytes().ctx()?.to_vec();
-        Ok(Self { remote_instance, interface, function, args })
+        Ok(Self { seq, function, args })
     }
 }
 
-/// RPC response payload structure
-#[derive(Debug, Clone, PartialEq)]
+/// RPC response structure
+#[derive(Debug, Clone)]
 pub struct RpcResponse {
-    /// The serialized result
-    pub result: Vec<u8>,
+    /// Sequence number matching the request
+    pub seq: u64,
+    /// Response result
+    pub result: Result<Val, String>,
 }
 
 impl RpcResponse {
-    /// Create a new RPC response
-    pub fn new(result: Vec<u8>) -> Self {
-        Self { result }
+    /// Create a successful RPC response
+    pub fn ok(seq: u64, value: Val) -> Self {
+        Self {
+            seq,
+            result: Ok(value),
+        }
     }
 
-    /// Serialize the RPC response to bytes using isopack
-    pub fn to_bytes(&self) -> Result<Vec<u8>> {
-        let mut encoder = Encoder::new();
-        encoder.bytes(&self.result).ctx()?;
-        Ok(encoder.into_bytes())
+    /// Create an error RPC response
+    pub fn err(seq: u64, error: String) -> Self {
+        Self {
+            seq,
+            result: Err(error),
+        }
     }
 
-    /// Deserialize an RPC response from bytes using isopack
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
-        let mut decoder = Decoder::new(bytes);
-        let result = decoder.bytes().ctx()?.to_vec();
-        Ok(Self { result })
+    /// Encode the RPC response to bytes
+    pub fn encode(&self) -> Result<Vec<u8>> {
+        match &self.result {
+            Ok(val) => isorpc::encode_response_ok(self.seq, val)
+                .context("Failed to encode RPC response"),
+            Err(err) => isorpc::encode_response_err(self.seq, err)
+                .context("Failed to encode RPC error"),
+        }
     }
-}
 
-/// Encode function arguments for math::add
-pub fn encode_math_add_args(a: u32, b: u32) -> Result<Vec<u8>> {
-    let mut encoder = Encoder::new();
-    let mut record_data = Vec::new();
-    record_data.extend_from_slice(&a.to_le_bytes());
-    record_data.extend_from_slice(&b.to_le_bytes());
-    encoder.record_raw(&record_data).ctx()?;
-    Ok(encoder.into_bytes())
-}
+    /// Decode an RPC response from bytes
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        let mut dec = Decoder::new(bytes);
+        let mut list = dec.list().context("Expected list for RPC response")?;
 
-/// Decode function arguments for math::add
-pub fn decode_math_add_args(bytes: &[u8]) -> Result<(u32, u32)> {
-    let mut decoder = Decoder::new(bytes);
-    let mut rec = decoder.record().ctx()?;
-    let a = rec.u32().ctx()?;
-    let b = rec.u32().ctx()?;
-    Ok((a, b))
-}
+        // Sequence number
+        let seq = list
+            .next()
+            .context("Missing sequence number")??
+            .as_u64()
+            .context("Sequence number must be u64")?;
 
-/// Encode function result for math::add
-pub fn encode_math_add_result(result: u32) -> Result<Vec<u8>> {
-    let mut encoder = Encoder::new();
-    encoder.u32(result).ctx()?;
-    Ok(encoder.into_bytes())
-}
+        // Result<Val, String>
+        let result = match list.next().context("Missing result")?? {
+            ValueDecoder::ResultOk => {
+                // TODO: Implement Val deserialization
+                anyhow::bail!("Val deserialization not yet implemented");
+            }
+            ValueDecoder::ResultErr => {
+                let error = list
+                    .next()
+                    .context("Missing error message")??
+                    .as_str()
+                    .context("Error must be string")?
+                    .to_string();
+                Err(error)
+            }
+            _ => anyhow::bail!("Expected Result type"),
+        };
 
-/// Decode function result for math::add
-pub fn decode_math_add_result(bytes: &[u8]) -> Result<u32> {
-    let mut decoder = Decoder::new(bytes);
-    let result = decoder.u32().ctx()?;
-    Ok(result)
+        Ok(Self { seq, result })
+    }
 }
 
 #[cfg(test)]
@@ -126,91 +147,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_rpc_call_roundtrip() {
+    fn test_rpc_call_encode() -> Result<()> {
         let call = RpcCall::new(
-            "instance-123".to_string(),
-            "test:demo/math".to_string(),
-            "add".to_string(),
-            vec![1, 2, 3, 4],
+            123,
+            "my_func".to_string(),
+            vec![Val::U32(42), Val::String("hello".into())],
         );
 
-        let bytes = call.to_bytes().unwrap();
-        let decoded = RpcCall::from_bytes(&bytes).unwrap();
+        let bytes = call.encode()?;
 
-        assert_eq!(call, decoded);
+        // Verify basic structure
+        let mut dec = Decoder::new(&bytes);
+        let mut list = dec.list()?;
+
+        assert_eq!(list.next()?.unwrap().as_u64()?, 123);
+        assert_eq!(list.next()?.unwrap().as_str()?, "my_func");
+
+        Ok(())
     }
 
     #[test]
-    fn test_rpc_response_roundtrip() {
-        let response = RpcResponse::new(vec![42, 0, 0, 0]);
+    fn test_rpc_response_ok_encode() -> Result<()> {
+        let response = RpcResponse::ok(456, Val::U64(9999));
+        let bytes = response.encode()?;
 
-        let bytes = response.to_bytes().unwrap();
-        let decoded = RpcResponse::from_bytes(&bytes).unwrap();
+        // Verify basic structure
+        let mut dec = Decoder::new(&bytes);
+        let mut list = dec.list()?;
 
-        assert_eq!(response, decoded);
+        assert_eq!(list.next()?.unwrap().as_u64()?, 456);
+
+        match list.next()?.unwrap() {
+            ValueDecoder::ResultOk => {
+                assert_eq!(list.next()?.unwrap().as_u64()?, 9999);
+            }
+            _ => panic!("Expected ResultOk"),
+        }
+
+        Ok(())
     }
 
     #[test]
-    fn test_math_add_args_roundtrip() {
-        let a = 10u32;
-        let b = 5u32;
+    fn test_rpc_response_err_encode() -> Result<()> {
+        let response = RpcResponse::err(789, "something went wrong".to_string());
+        let bytes = response.encode()?;
 
-        let bytes = encode_math_add_args(a, b).unwrap();
-        let (decoded_a, decoded_b) = decode_math_add_args(&bytes).unwrap();
+        // Verify basic structure
+        let mut dec = Decoder::new(&bytes);
+        let mut list = dec.list()?;
 
-        assert_eq!(a, decoded_a);
-        assert_eq!(b, decoded_b);
-    }
+        assert_eq!(list.next()?.unwrap().as_u64()?, 789);
 
-    #[test]
-    fn test_math_add_result_roundtrip() {
-        let result = 15u32;
+        match list.next()?.unwrap() {
+            ValueDecoder::ResultErr => {
+                assert_eq!(list.next()?.unwrap().as_str()?, "something went wrong");
+            }
+            _ => panic!("Expected ResultErr"),
+        }
 
-        let bytes = encode_math_add_result(result).unwrap();
-        let decoded = decode_math_add_result(&bytes).unwrap();
-
-        assert_eq!(result, decoded);
-    }
-
-    #[test]
-    fn test_full_rpc_roundtrip() {
-        // Encode arguments
-        let args = encode_math_add_args(10, 5).unwrap();
-
-        // Create RPC call
-        let call = RpcCall::new(
-            "math-service".to_string(),
-            "test:demo/math".to_string(),
-            "add".to_string(),
-            args,
-        );
-
-        // Serialize call
-        let call_bytes = call.to_bytes().unwrap();
-
-        // Deserialize call
-        let decoded_call = RpcCall::from_bytes(&call_bytes).unwrap();
-
-        // Decode arguments
-        let (a, b) = decode_math_add_args(&decoded_call.args).unwrap();
-        assert_eq!(a, 10);
-        assert_eq!(b, 5);
-
-        // Simulate execution and encode result
-        let result = a + b;
-        let result_bytes = encode_math_add_result(result).unwrap();
-
-        // Create RPC response
-        let response = RpcResponse::new(result_bytes);
-
-        // Serialize response
-        let response_bytes = response.to_bytes().unwrap();
-
-        // Deserialize response
-        let decoded_response = RpcResponse::from_bytes(&response_bytes).unwrap();
-
-        // Decode result
-        let final_result = decode_math_add_result(&decoded_response.result).unwrap();
-        assert_eq!(final_result, 15);
+        Ok(())
     }
 }
