@@ -3,12 +3,17 @@ use std::path::PathBuf;
 pub struct Isoname(String);
 
 impl Isoname {
+    /// Check if char is valid, i.e. is in `a-zA-Z0-9_\-`
+    fn valid_char(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '_' || c == '-'
+    }
+
     /// An Isoname has min length 1, max length 32
-    /// and consists of /a-zA-Z0-9_\-/
+    /// and each char in the name is valid
     pub fn new(name: String) -> Option<Self> {
-        if name.len() == 0 { return None; }
-        if name.len() > 32 { return None; }
-        todo!()
+        let ok_length = !name.is_empty() || name.len() > 32;
+        let ok_contents = name.chars().all(Self::valid_char);
+        if ok_length && ok_contents { Some(Isoname(name)) } else { None }
     }
 }
 

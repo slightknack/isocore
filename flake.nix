@@ -11,7 +11,7 @@
         pkgs = import nixpkgs { inherit system; overlays = [ (import rust-overlay) ]; };
         rust = pkgs.rust-bin.stable.latest.default.override {
           extensions = [ "rust-src" "rust-analyzer" ];
-          targets = [ "wasm32-wasip1" ];
+          targets = [ "wasm32-wasip2" ];
         };
       in {
         devShells.default = pkgs.mkShell {
@@ -20,6 +20,7 @@
             pkgs.pkg-config
             pkgs.openssl
             pkgs.wasmtime
+            pkgs.wasm-tools
             pkgs.cargo-component
           ];
           RUST_SRC_PATH = "${rust}/lib/rustlib/src/rust/library";

@@ -2,3 +2,6 @@
 !.gitignore
 
 **/target
+
+# WASI adapter (downloaded during build)
+wasi_snapshot_preview1.*.wasm
