@@ -24,11 +24,10 @@ impl WasiDir {
 }
 
 impl SystemComponent for WasiDir {
-    fn install(&self, _linker: &mut Linker<IsorunCtx>) -> Result<()> {
-        // Implementation note: Only link FS types and preopens. No network, no clocks, no random.
-        // wasmtime_wasi::bindings::filesystem::types::add_to_linker(linker, |ctx| &mut ctx.wasi)?;
-        // wasmtime_wasi::bindings::filesystem::preopens::add_to_linker(linker, |ctx| &mut ctx.wasi)?;
-        todo!("Implement WASI filesystem bindings installation")
+    fn install(&self, linker: &mut Linker<IsorunCtx>) -> Result<()> {
+        // Only link FS types and preopens. No network, no clocks, no random.
+        wasmtime_wasi::p2::add_to_linker_async(linker)?;
+        Ok(())
     }
 
     fn configure(&self, builder: &mut ContextBuilder) -> Result<()> {

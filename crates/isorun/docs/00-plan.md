@@ -1,3 +1,5 @@
+<!-- generated -->
+
 # Isorun Implementation Plan
 
 This document outlines the implementation tasks for the isorun runtime, organized in dependency order with verification steps.

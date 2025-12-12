@@ -908,12 +908,17 @@ name = "isocore"
 version = "0.1.0"
 
 [[package]]
+name = "isopack"
+version = "0.1.0"
+
+[[package]]
 name = "isorun"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "anymap",
  "async-trait",
+ "isopack",
  "tokio",
  "wasmtime",
  "wasmtime-wasi",

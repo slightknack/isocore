@@ -1,0 +1,37 @@
+<!-- handwritten -->
+
+- rpc needs a major rewrite
+  - has hardcoded serialization
+  - RpcResponse is basically ???
+- need to implement the meta app and WIT:
+  - add new named wit
+  - add new named wasm
+  - start new app instance
+  - list all app instances and status
+  - kill app instance
+- need to implement crypto system interface
+  - isokey
+  - public/private keys, key exchange, password key derivation, etc
+  - warn about not using over network etc
+- need to implement signed append-only log system interface
+  - isocore
+  - add message (bytes) receive index
+  - retrieve message at index bytes
+  - get packed representation of present messages
+  - get merkle root hashes at given point in time
+  - get set of children from packed representation
+  - apply set of children to packed representation
+  - ideally, this should use isocore under the hood
+  - this requires crypto system interface as dep
+- need to implement auth, first app:
+  - needs isocore, isoauth
+  - has a core with list of usernames and public keys and salts
+  - has a function login that takes password, looks up salt, derives secret key from username + password + salt, derives public key, checks for match, and returns secret key or a scoped ephemeral secret key or something
+  - each username has a fixed number of invites
+    - the root username has an infinite number of invites
+    - users can distribute invites down the tree
+  - if a username has nonzero invites, they can burn an invite to generate an invite code
+  - unauthenticated, a user can submit an invite code and a secret key with a username to generate a new account
+  - there is a second isocore with user data on top
+    - email, display name, etc.
+  - there is an update password function that takes the old password and new password and derives the secret keys from both then xors them together and stores that, so a user can change their password but still recover old keys.

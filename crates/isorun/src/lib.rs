@@ -4,6 +4,7 @@ pub mod builder;
 pub mod context;
 pub mod handles;
 pub mod instance;
+pub mod rpc;
 pub mod runtime;
 pub mod system;
 pub mod traits;

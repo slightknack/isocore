@@ -67,19 +67,22 @@ impl SysLogger {
 }
 
 impl SystemComponent for SysLogger {
-    fn install(&self, _linker: &mut Linker<IsorunCtx>) -> anyhow::Result<()> {
-        // TODO: Implement proper host function binding
-        // The component linker API in wasmtime 39 requires different approach
-        todo!("Implement host function binding")
-    }
-
-    fn configure(&self, _builder: &mut ContextBuilder) -> anyhow::Result<()> {
+    fn install(&self, linker: &mut Linker<IsorunCtx>) -> anyhow::Result<()> {
+        let logs = self.logs.clone();
+        
+        linker.instance("test:demo/logging")?.func_wrap(
+            "log",
+            move |_caller: wasmtime::StoreContextMut<'_, IsorunCtx>, (level, msg): (String, String)| {
+                logs.lock().unwrap().push(format!("[{}] {}", level, msg));
+                Ok(())
+            },
+        )?;
+        
         Ok(())
     }
 }
 
 #[tokio::test]
-#[ignore] // TODO: Implement proper host function binding API
 async fn test_system_integration() -> anyhow::Result<()> {
     let rt = Runtime::new()?;
     let logger_sys = SysLogger::new();
@@ -96,7 +99,6 @@ async fn test_system_integration() -> anyhow::Result<()> {
 
 // Test 2: App-to-App Wiring (Local)
 #[tokio::test]
-#[ignore] // TODO: Implement LocalInstance linking
 async fn test_app_to_app_local() -> anyhow::Result<()> {
     let rt = Runtime::new()?;
     
@@ -124,18 +126,37 @@ impl InMemoryKv {
 }
 
 impl SystemComponent for InMemoryKv {
-    fn install(&self, _linker: &mut Linker<IsorunCtx>) -> anyhow::Result<()> {
-        // TODO: Implement proper host function binding
-        todo!("Implement host function binding")
-    }
-
-    fn configure(&self, _builder: &mut ContextBuilder) -> anyhow::Result<()> {
+    fn install(&self, linker: &mut Linker<IsorunCtx>) -> anyhow::Result<()> {
+        let store = self.store.clone();
+        
+        let mut instance = linker.instance("test:demo/kv")?;
+        
+        // Bind the 'get' function
+        instance.func_wrap(
+            "get",
+            {
+                let store = store.clone();
+                move |_caller: wasmtime::StoreContextMut<'_, IsorunCtx>, (key,): (String,)| {
+                    let value = store.lock().unwrap().get(&key).cloned();
+                    Ok((value,))
+                }
+            },
+        )?;
+        
+        // Bind the 'set' function
+        instance.func_wrap(
+            "set",
+            move |_caller: wasmtime::StoreContextMut<'_, IsorunCtx>, (key, val): (String, String)| {
+                store.lock().unwrap().insert(key, val);
+                Ok(())
+            },
+        )?;
+        
         Ok(())
     }
 }
 
 #[tokio::test]
-#[ignore] // TODO: Implement proper host function binding API
 async fn test_stateful_system() -> anyhow::Result<()> {
     let rt = Runtime::new()?;
     let kv_sys = InMemoryKv::new();
@@ -152,7 +173,6 @@ async fn test_stateful_system() -> anyhow::Result<()> {
 
 // Test 4: Remote Peer (Mock Transport)
 #[tokio::test]
-#[ignore] // TODO: Implement full RPC implementation
 async fn test_remote_peer_mock() -> anyhow::Result<()> {
     let rt = Runtime::new()?;
     
@@ -172,7 +192,6 @@ async fn test_remote_peer_mock() -> anyhow::Result<()> {
 
 // Test 5: Diamond Dependency (Shared System)
 #[tokio::test]
-#[ignore] // TODO: Implement proper host function binding API
 async fn test_diamond_dependency() -> anyhow::Result<()> {
     let rt = Runtime::new()?;
     let shared_kv = InMemoryKv::new();

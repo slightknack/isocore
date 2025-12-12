@@ -1,6 +1,8 @@
 //! Context types for instance configuration and execution
 
 use wasmtime::component::ResourceTable;
+use wasmtime_wasi::WasiCtxView;
+use wasmtime_wasi::WasiView;
 
 /// Configuration and budget for instances
 #[derive(Clone, Debug)]
@@ -61,5 +63,14 @@ impl IsorunCtx {
     
     pub fn get_mut<T: Send + Sync + 'static>(&mut self) -> Option<&mut T> {
         self.user_data.get_mut::<T>()
+    }
+}
+
+impl WasiView for IsorunCtx {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
 }
