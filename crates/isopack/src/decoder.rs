@@ -120,6 +120,17 @@ impl<'a> Decoder<'a> {
             Tag::U32 | Tag::S32 | Tag::F32 => self.cursor.skip(4),
             Tag::U64 | Tag::S64 | Tag::F64 => self.cursor.skip(8),
 
+            // ADT tags with no payload
+            Tag::Unit | Tag::OptionSome | Tag::OptionNone | Tag::ResultOk | Tag::ResultErr => {
+                Ok(())
+            }
+
+            // Variant has a string payload
+            Tag::Variant => {
+                let len: u32 = self.read_primitive()?;
+                self.cursor.skip(len as usize)
+            }
+
             Tag::String | Tag::Bytes | Tag::Struct |
             Tag::List | Tag::Map | Tag::Array => {
                 let len: u32 = self.read_primitive()?;
@@ -297,6 +308,13 @@ pub enum ValueDecoder<'a> {
     List(ListDecoder<'a>),
     Map(MapDecoder<'a>),
     Array(ArrayDecoder<'a>),
+    // ADT variants
+    Unit,
+    OptionSome,
+    OptionNone,
+    ResultOk,
+    ResultErr,
+    Variant(&'a str),
 }
 
 impl<'a> ValueDecoder<'a> {
@@ -357,11 +375,41 @@ impl<'a> ValueDecoder<'a> {
                     remaining: count,
                 }))
             }
+
+            // ADT tags - these should not appear in from_untagged_bytes
+            // as they have no payload (handled in read())
+            Tag::Unit => Ok(Unit),
+            Tag::OptionSome => Ok(OptionSome),
+            Tag::OptionNone => Ok(OptionNone),
+            Tag::ResultOk => Ok(ResultOk),
+            Tag::ResultErr => Ok(ResultErr),
+            Tag::Variant => {
+                // Variant payload is a string
+                let s = std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
+                Ok(ValueDecoder::Variant(s))
+            }
         }
     }
 
     pub fn read(decoder: &mut Decoder<'a>) -> Result<Self> {
         let tag = decoder.read_tag()?;
+
+        // ADT tags with no payload
+        match tag {
+            Tag::Unit => return Ok(ValueDecoder::Unit),
+            Tag::OptionSome => return Ok(ValueDecoder::OptionSome),
+            Tag::OptionNone => return Ok(ValueDecoder::OptionNone),
+            Tag::ResultOk => return Ok(ValueDecoder::ResultOk),
+            Tag::ResultErr => return Ok(ValueDecoder::ResultErr),
+            Tag::Variant => {
+                // Variant has a string name as payload
+                let len = decoder.read_primitive::<u32>()? as usize;
+                let bytes = decoder.cursor.read_bytes(len)?;
+                let name = std::str::from_utf8(bytes).map_err(|_| Error::InvalidUtf8)?;
+                return Ok(ValueDecoder::Variant(name));
+            }
+            _ => {}
+        }
 
         let len = match tag {
             Tag::Bool | Tag::U8 | Tag::S8 => 1,
@@ -373,6 +421,8 @@ impl<'a> ValueDecoder<'a> {
             Tag::List | Tag::Map | Tag::Array => {
                 decoder.read_primitive::<u32>()? as usize
             }
+
+            _ => return Err(Error::InvalidTag(tag as u8)),
         };
 
         let bytes = decoder.cursor.read_bytes(len)?;

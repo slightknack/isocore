@@ -114,6 +114,57 @@ macro_rules! encode_wrapper_api {
             Ok($post)
         }
 
+        // ADT methods
+        pub fn unit($($recv)+) -> crate::types::Result<$ret_ty> {
+            $pre
+            $parent.unit()?;
+            Ok($post)
+        }
+
+        pub fn option_some($($recv)+) -> crate::types::Result<$ret_ty> {
+            $pre
+            $parent.option_some()?;
+            Ok($post)
+        }
+
+        pub fn option_none($($recv)+) -> crate::types::Result<$ret_ty> {
+            $pre
+            $parent.option_none()?;
+            Ok($post)
+        }
+
+        pub fn result_ok($($recv)+) -> crate::types::Result<$ret_ty> {
+            $pre
+            $parent.result_ok()?;
+            Ok($post)
+        }
+
+        pub fn result_err($($recv)+) -> crate::types::Result<$ret_ty> {
+            $pre
+            $parent.result_err()?;
+            Ok($post)
+        }
+
+        pub fn variant($($recv)+, name: &str) -> crate::types::Result<ValueEncoder<$lt>> {
+            $pre
+            $parent.variant(name)
+        }
+
+        pub fn option_some($($recv)+) -> crate::types::Result<ValueEncoder<$lt>> {
+            $pre
+            $parent.option_some()
+        }
+
+        pub fn result_ok($($recv)+) -> crate::types::Result<ValueEncoder<$lt>> {
+            $pre
+            $parent.result_ok()
+        }
+
+        pub fn result_err($($recv)+) -> crate::types::Result<ValueEncoder<$lt>> {
+            $pre
+            $parent.result_err()
+        }
+
         pub fn list($($recv)+) -> crate::types::Result<ListEncoder<$lt>> {
             $pre
             $parent.list()
@@ -205,6 +256,50 @@ macro_rules! decode_val_as {
     };
 }
 
+/// Implement IsoWriter trait by delegating to a receiver
+/// Usage: impl_isowriter_delegate!() for delegating to self
+///        impl_isowriter_delegate!(parent) for delegating to self.parent
+macro_rules! impl_isowriter_delegate {
+    () => {
+        fn bool(&mut self, v: bool) -> crate::types::Result<()> { self.bool(v)?; Ok(()) }
+        fn u8(&mut self, v: u8) -> crate::types::Result<()> { self.u8(v)?; Ok(()) }
+        fn i8(&mut self, v: i8) -> crate::types::Result<()> { self.i8(v)?; Ok(()) }
+        fn u16(&mut self, v: u16) -> crate::types::Result<()> { self.u16(v)?; Ok(()) }
+        fn i16(&mut self, v: i16) -> crate::types::Result<()> { self.i16(v)?; Ok(()) }
+        fn u32(&mut self, v: u32) -> crate::types::Result<()> { self.u32(v)?; Ok(()) }
+        fn i32(&mut self, v: i32) -> crate::types::Result<()> { self.i32(v)?; Ok(()) }
+        fn u64(&mut self, v: u64) -> crate::types::Result<()> { self.u64(v)?; Ok(()) }
+        fn i64(&mut self, v: i64) -> crate::types::Result<()> { self.i64(v)?; Ok(()) }
+        fn f32(&mut self, v: f32) -> crate::types::Result<()> { self.f32(v)?; Ok(()) }
+        fn f64(&mut self, v: f64) -> crate::types::Result<()> { self.f64(v)?; Ok(()) }
+        fn str(&mut self, v: &str) -> crate::types::Result<()> { self.str(v)?; Ok(()) }
+        fn bytes(&mut self, v: &[u8]) -> crate::types::Result<()> { self.bytes(v)?; Ok(()) }
+        fn record_raw(&mut self, v: &[u8]) -> crate::types::Result<()> { self.record_raw(v)?; Ok(()) }
+        
+        fn unit(&mut self) -> crate::types::Result<()> { self.unit()?; Ok(()) }
+        fn option_none(&mut self) -> crate::types::Result<()> { self.option_none()?; Ok(()) }
+    };
+    ($field:ident) => {
+        fn bool(&mut self, v: bool) -> crate::types::Result<()> { self.$field.bool(v)?; Ok(()) }
+        fn u8(&mut self, v: u8) -> crate::types::Result<()> { self.$field.u8(v)?; Ok(()) }
+        fn i8(&mut self, v: i8) -> crate::types::Result<()> { self.$field.i8(v)?; Ok(()) }
+        fn u16(&mut self, v: u16) -> crate::types::Result<()> { self.$field.u16(v)?; Ok(()) }
+        fn i16(&mut self, v: i16) -> crate::types::Result<()> { self.$field.i16(v)?; Ok(()) }
+        fn u32(&mut self, v: u32) -> crate::types::Result<()> { self.$field.u32(v)?; Ok(()) }
+        fn i32(&mut self, v: i32) -> crate::types::Result<()> { self.$field.i32(v)?; Ok(()) }
+        fn u64(&mut self, v: u64) -> crate::types::Result<()> { self.$field.u64(v)?; Ok(()) }
+        fn i64(&mut self, v: i64) -> crate::types::Result<()> { self.$field.i64(v)?; Ok(()) }
+        fn f32(&mut self, v: f32) -> crate::types::Result<()> { self.$field.f32(v)?; Ok(()) }
+        fn f64(&mut self, v: f64) -> crate::types::Result<()> { self.$field.f64(v)?; Ok(()) }
+        fn str(&mut self, v: &str) -> crate::types::Result<()> { self.$field.str(v)?; Ok(()) }
+        fn bytes(&mut self, v: &[u8]) -> crate::types::Result<()> { self.$field.bytes(v)?; Ok(()) }
+        fn record_raw(&mut self, v: &[u8]) -> crate::types::Result<()> { self.$field.record_raw(v)?; Ok(()) }
+        
+        fn unit(&mut self) -> crate::types::Result<()> { self.$field.unit()?; Ok(()) }
+        fn option_none(&mut self) -> crate::types::Result<()> { self.$field.option_none()?; Ok(()) }
+    };
+}
+
 pub(crate) use for_each_scalar;
 pub(crate) use for_each_multibyte_scalar;
 pub(crate) use encode_root_multibyte;
@@ -217,3 +312,4 @@ pub(crate) use decode_expect_tag;
 pub(crate) use decode_record_prim;
 pub(crate) use decode_array_method;
 pub(crate) use decode_val_as;
+pub(crate) use impl_isowriter_delegate;

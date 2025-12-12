@@ -1,6 +1,7 @@
 mod macros;
 
 pub mod types;
+pub mod traits;
 pub mod encoder;
 pub mod decoder;
 pub mod cursor;

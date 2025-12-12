@@ -1,14 +1,18 @@
 use std::mem;
 
-use super::types::Result;
-use super::types::Error;
-use super::types::Tag;
-use super::macros::encode_wrapper_method;
-use super::macros::for_each_multibyte_scalar;
-use super::macros::encode_wrapper_api;
-use super::macros::encode_record_multibyte;
-use super::macros::encode_array_multibyte;
-use super::macros::encode_root_multibyte;
+use crate::macros::encode_array_multibyte;
+use crate::macros::encode_record_multibyte;
+use crate::macros::encode_root_multibyte;
+use crate::macros::encode_wrapper_api;
+use crate::macros::encode_wrapper_method;
+use crate::macros::for_each_multibyte_scalar;
+use crate::macros::impl_isowriter_delegate;
+use crate::traits::IsoArrayWriter;
+use crate::traits::IsoMapWriter;
+use crate::traits::IsoWriter;
+use crate::types::Error;
+use crate::types::Result;
+use crate::types::Tag;
 
 /// A growable buffer that encodes data into the NeoPack format.
 pub struct Encoder {
@@ -186,6 +190,104 @@ impl Encoder {
         Ok(self)
     }
 
+    // ADT (Algebraic Data Type) methods
+    
+    /// Write a Unit type marker (represents empty/void value)
+    /// 
+    /// This is a complete value in itself and requires no payload.
+    #[inline]
+    pub fn unit(&mut self) -> Result<&mut Self> {
+        if self.buf.len() >= u32::MAX as usize {
+            return Err(Error::ContainerFull);
+        }
+        self.write_tag(Tag::Unit);
+        Ok(self)
+    }
+
+    /// Write an Option::Some discriminant and return a payload encoder
+    /// 
+    /// The returned `ValueEncoder` should have exactly one value written to it.
+    /// Example:
+    /// ```ignore
+    /// encoder.option_some()?.u32(42)?;
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn option_some(&mut self) -> Result<ValueEncoder<'_>> {
+        if self.buf.len() >= u32::MAX as usize {
+            return Err(Error::ContainerFull);
+        }
+        self.write_tag(Tag::OptionSome);
+        Ok(ValueEncoder::new(self))
+    }
+
+    /// Write an Option::None discriminant
+    /// 
+    /// This is a complete value in itself and requires no payload.
+    #[inline]
+    pub fn option_none(&mut self) -> Result<&mut Self> {
+        if self.buf.len() >= u32::MAX as usize {
+            return Err(Error::ContainerFull);
+        }
+        self.write_tag(Tag::OptionNone);
+        Ok(self)
+    }
+
+    /// Write a Result::Ok discriminant and return a payload encoder
+    /// 
+    /// The returned `ValueEncoder` should have exactly one value written to it.
+    /// Example:
+    /// ```ignore
+    /// encoder.result_ok()?.str("success")?;
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn result_ok(&mut self) -> Result<ValueEncoder<'_>> {
+        if self.buf.len() >= u32::MAX as usize {
+            return Err(Error::ContainerFull);
+        }
+        self.write_tag(Tag::ResultOk);
+        Ok(ValueEncoder::new(self))
+    }
+
+    /// Write a Result::Err discriminant and return a payload encoder
+    /// 
+    /// The returned `ValueEncoder` should have exactly one value written to it.
+    /// Example:
+    /// ```ignore
+    /// encoder.result_err()?.str("error message")?;
+    /// ```
+    #[inline]
+    #[must_use]
+    pub fn result_err(&mut self) -> Result<ValueEncoder<'_>> {
+        if self.buf.len() >= u32::MAX as usize {
+            return Err(Error::ContainerFull);
+        }
+        self.write_tag(Tag::ResultErr);
+        Ok(ValueEncoder::new(self))
+    }
+
+    /// Write a Variant discriminant with name and return a payload encoder
+    /// 
+    /// The returned `ValueEncoder` should have exactly one value written to it.
+    /// For unit variants, write `unit()`. Example:
+    /// ```ignore
+    /// // Variant with payload
+    /// encoder.variant("Error")?.str("message")?;
+    /// 
+    /// // Unit variant
+    /// encoder.variant("Success")?.unit()?;
+    /// ```
+    #[must_use]
+    pub fn variant(&mut self, name: &str) -> Result<ValueEncoder<'_>> {
+        if self.buf.len() >= u32::MAX as usize {
+            return Err(Error::ContainerFull);
+        }
+        self.write_tag(Tag::Variant);
+        self.write_blob(Tag::String, name.as_bytes())?;
+        Ok(ValueEncoder::new(self))
+    }
+
     /// Starts a standard Record (opaque struct with a Tag and Length header).
     pub fn record(&mut self) -> Result<RecordEncoder<'_>> {
         if self.buf.len() >= u32::MAX as usize {
@@ -295,18 +397,35 @@ impl<'a> MapEncoder<'a> {
     }
 }
 
-#[must_use]
-pub struct MapValueEncoder<'a> {
+/// Single-value encoder used for map values and ADT payloads
+/// 
+/// This encoder enforces that exactly one value should be written before
+/// continuing. It's used in two contexts:
+/// - After `MapEncoder::key()` - to write the corresponding value
+/// - After ADT discriminants like `option_some()`, `result_ok()`, `variant()` - to write the payload
+/// 
+/// The `#[must_use]` attribute ensures the compiler warns if you don't write a value.
+/// While the type system doesn't enforce exactly one write, the API design and
+/// documentation make the intent clear.
+#[must_use = "you must write exactly one value after creating a ValueEncoder"]
+pub struct ValueEncoder<'a> {
     parent: &'a mut Encoder,
 }
 
-impl<'a> MapValueEncoder<'a> {
-    encode_wrapper_api!([self], (), 'a;
+impl<'a> ValueEncoder<'a> {
+    fn new(parent: &'a mut Encoder) -> Self {
+        Self { parent }
+    }
+
+    encode_wrapper_api!([&mut self], &mut Self, 'a;
         parent: self.parent;
         pre: {};
-        post: ()
+        post: self
     );
 }
+
+// Type alias for backwards compatibility in map context
+pub type MapValueEncoder<'a> = ValueEncoder<'a>;
 
 pub struct RecordEncoder<'a> {
     scope: PatchScope<'a>,
@@ -446,5 +565,104 @@ impl<'p, 'a> RecordBodyEncoder<'p, 'a> {
             return Err(Error::Malformed);
         }
         Ok(self.parent)
+    }
+}
+
+// IsoWriter trait implementations
+
+impl IsoWriter for Encoder {
+    type ListTarget<'a> = ListEncoder<'a>;
+    type MapTarget<'a> = MapEncoder<'a>;
+    type ArrayTarget<'a> = ArrayEncoder<'a>;
+
+    impl_isowriter_delegate!();
+
+    fn list(&mut self) -> Result<ListEncoder<'_>> {
+        Encoder::list(self)
+    }
+
+    fn map(&mut self) -> Result<MapEncoder<'_>> {
+        Encoder::map(self)
+    }
+
+    fn array(&mut self, tag: Tag, stride: usize) -> Result<ArrayEncoder<'_>> {
+        Encoder::array(self, tag, stride)
+    }
+
+    fn finish(self) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> IsoWriter for ListEncoder<'a> {
+    type ListTarget<'b> = ListEncoder<'b> where 'a: 'b;
+    type MapTarget<'b> = MapEncoder<'b> where 'a: 'b;
+    type ArrayTarget<'b> = ArrayEncoder<'b> where 'a: 'b;
+
+    impl_isowriter_delegate!();
+
+    fn list(&mut self) -> Result<ListEncoder<'_>> {
+        ListEncoder::list(self)
+    }
+
+    fn map(&mut self) -> Result<MapEncoder<'_>> {
+        ListEncoder::map(self)
+    }
+
+    fn array(&mut self, tag: Tag, stride: usize) -> Result<ArrayEncoder<'_>> {
+        ListEncoder::array(self, tag, stride)
+    }
+
+    fn finish(self) -> Result<()> {
+        self.scope.finish()?;
+        Ok(())
+    }
+}
+
+impl<'a> IsoWriter for ValueEncoder<'a> {
+    type ListTarget<'b> = ListEncoder<'b> where 'a: 'b;
+    type MapTarget<'b> = MapEncoder<'b> where 'a: 'b;
+    type ArrayTarget<'b> = ArrayEncoder<'b> where 'a: 'b;
+
+    impl_isowriter_delegate!(parent);
+
+    fn list(&mut self) -> Result<ListEncoder<'_>> {
+        self.parent.list()
+    }
+
+    fn map(&mut self) -> Result<MapEncoder<'_>> {
+        self.parent.map()
+    }
+
+    fn array(&mut self, tag: Tag, stride: usize) -> Result<ArrayEncoder<'_>> {
+        self.parent.array(tag, stride)
+    }
+
+    fn finish(self) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> IsoMapWriter for MapEncoder<'a> {
+    type ValueTarget<'b> = MapValueEncoder<'b> where 'a: 'b;
+
+    fn key(&mut self, k: &str) -> Result<MapValueEncoder<'_>> {
+        self.key(k)
+    }
+
+    fn finish(self) -> Result<()> {
+        self.scope.finish()?;
+        Ok(())
+    }
+}
+
+impl<'a> IsoArrayWriter for ArrayEncoder<'a> {
+    fn push(&mut self, data: &[u8]) -> Result<()> {
+        self.push(data)
+    }
+
+    fn finish(self) -> Result<()> {
+        self.scope.finish()?;
+        Ok(())
     }
 }
