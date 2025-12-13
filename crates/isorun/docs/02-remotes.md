@@ -1,5 +1,7 @@
-<!-- handwritten -->
-<!-- 2025-12-12 -->
+---
+origin: handwritten
+date: 2025-12-12
+---
 
 Taking a step back, how do we want to use components defined on other machines?
 

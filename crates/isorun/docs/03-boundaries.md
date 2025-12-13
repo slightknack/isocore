@@ -1,5 +1,7 @@
-<!-- handwritten -->
-<!-- 2025-12-12 -->
+---
+origin: handwritten
+date: 2025-12-12
+---
 
 We have:
 

@@ -1,5 +1,7 @@
-<!-- handwritten -->
-<!-- 2025-12-12 -->
+---
+origin: handwritten
+date: 2025-12-12
+---
 
 I am working on a translation layer for WIT (WebAssembly Interface Types). I want you to read about the canonical ABI. I am using wasmtime. The goal is to allow for rpc calls between different wasm components running on different machines, as long as they correspond to the same interface. Each rpc call has a:
 

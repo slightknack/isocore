@@ -1,5 +1,7 @@
-<!-- handwritten -->
-<!-- 2025-12-11 -->
+---
+origin: handwritten
+date: 2025-12-11
+---
 
 - rpc needs a major rewrite
   - has hardcoded serialization

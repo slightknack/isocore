@@ -1,5 +1,7 @@
-<!-- generated -->
-<!-- 2025-12-12 -->
+---
+origin: generated
+date: 2025-12-12
+---
 
 The cooling fans were whispering a low, monotonic dirge as the clock crawled toward two in the morning, a time when the brain starts to treat memory addresses like poetry and compiler errors like personal insults. I had set out to build NeoRPC, a project intended to be the bedrock of a new ecosystem, a bridge between the semantic richness of Wasmtime and the minimalist ledger-like rigor of Neopack. It was supposed to be a straightforward construction project, a matter of laying down the first principles of state reasoning and then simply building the walls of implementation. I had my blueprints, my invariants, and my tigerstyle defensive posture ready. But then I met the Wasmtime Component Model validator, a gatekeeper so uncompromising it made a kernel hacker look like a casual hobbyist.
 

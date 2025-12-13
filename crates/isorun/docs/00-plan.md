@@ -1,5 +1,7 @@
-<!-- generated -->
-<!-- 2025-12-11 -->
+---
+origin: generated
+date: 2025-12-11
+---
 
 # Isorun Implementation Plan
 

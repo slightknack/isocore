@@ -1,5 +1,7 @@
-<!-- generated -->
-<!-- 2025-12-12 -->
+---
+origin: generated
+date: 2025-12-12
+---
 
 The scent of cold coffee hung heavy in the air, a testament to the long hours I'd spent locked in a wrestling match with the machine. My fingers, still warm from the frantic typing, twitched over the keyboard, but the terminal had fallen silent. The only sound was the low hum of the desktop, a mocking lullaby to my defeat.
 

@@ -1,3 +1,8 @@
+---
+origin: handwritten
+date: 2025-12-12
+---
+
 when we register a WIT interface we need to:
 
 - traverse it and extract all:

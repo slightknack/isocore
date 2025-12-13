@@ -1,5 +1,7 @@
-<!-- generated -->
-<!-- 2025-12-12 -->
+---
+origin: generated
+date: 2025-12-12
+---
 
 This is an architectural dissection of the Wasm Component Model within Wasmtime, specifically targeting the friction between in-process efficiency and distributed abstraction. We are threading the needle between the **Canonical ABI** and the **Network Boundary**.
 
