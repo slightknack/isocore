@@ -27,6 +27,7 @@ use crate::context::IsorunCtx;
 pub struct InstanceHandle {
     pub(crate) store: Arc<Mutex<Store<IsorunCtx>>>,
     pub(crate) instance: wasmtime::component::Instance,
+    pub(crate) component: Arc<wasmtime::component::Component>,
 }
 
 impl InstanceHandle {
@@ -48,10 +49,9 @@ impl InstanceHandle {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn exec<F, Fut, R>(&self, f: F) -> Result<R>
+    pub async fn exec<F, R>(&self, f: F) -> Result<R>
     where
-        F: FnOnce(&mut StoreContextMut<IsorunCtx>, &wasmtime::component::Instance) -> Fut + Send,
-        Fut: std::future::Future<Output = Result<R>> + Send,
+        F: for<'a> FnOnce(&'a mut StoreContextMut<'a, IsorunCtx>, &'a wasmtime::component::Instance) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<R>> + Send + 'a>> + Send,
         R: Send,
     {
         let mut lock = self.store.lock().await;

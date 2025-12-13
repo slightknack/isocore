@@ -50,6 +50,8 @@ pub mod builder;
 pub mod context;
 pub mod handles;
 pub mod instance;
+pub mod introspect;
+pub mod linker;
 pub mod rpc;
 pub mod runtime;
 pub mod system;

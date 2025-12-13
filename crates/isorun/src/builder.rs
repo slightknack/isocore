@@ -155,27 +155,19 @@ impl<'a> InstanceBuilder<'a> {
         let mut ctx_builder = ContextBuilder::new();
 
         // --- The Wiring Loop ---
-        let _links = self.links;
+        let links = self.links;
         
-        // TODO: Implement generic linking
-        // For now, we only support System components
-        // Remote and LocalInstance linking will be added in later phases
-        
-        for (_name, target) in _links {
+        for (name, target) in links {
             match target {
                 Linkable::System(sys) => {
                     sys.install(&mut linker)?;
                     sys.configure(&mut ctx_builder)?;
                 }
-                Linkable::LocalInstance(_handle) => {
-                    // TODO: Generic local instance bridging
-                    // This requires dynamic component introspection
-                    anyhow::bail!("LocalInstance linking not yet implemented");
+                Linkable::LocalInstance(handle) => {
+                    crate::linker::link_local_instance(&mut linker, &name, handle).await?;
                 }
-                Linkable::Remote { .. } => {
-                    // TODO: Generic RPC stub generation
-                    // This requires dynamic component introspection
-                    anyhow::bail!("Remote linking not yet implemented");
+                Linkable::Remote { transport, target_id } => {
+                    crate::linker::link_remote(&mut linker, &name, component, transport, target_id)?;
                 }
             }
         }
@@ -191,6 +183,7 @@ impl<'a> InstanceBuilder<'a> {
         Ok(InstanceHandle {
             store: Arc::new(Mutex::new(store)),
             instance,
+            component: Arc::new(component.clone()),
         })
     }
 }

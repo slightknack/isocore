@@ -4,7 +4,6 @@ use std::sync::Mutex;
 
 use wasmtime::component::Linker;
 
-use isorun::ContextBuilder;
 use isorun::InstanceBuilder;
 use isorun::IsorunCtx;
 use isorun::Linkable;
