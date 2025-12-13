@@ -60,3 +60,32 @@ pub enum FailureReason {
     /// The RPC frame was malformed.
     ProtocolViolation(String),
 }
+
+impl FailureReason {
+    /// Get the wire representation tag for this failure reason.
+    pub fn as_tag(&self) -> &'static str {
+        match self {
+            Self::AppTrapped => "Trapped",
+            Self::OutOfFuel => "NoFuel",
+            Self::OutOfMemory => "OOM",
+            Self::InstanceNotFound => "NoInstance",
+            Self::MethodNotFound => "NoMethod",
+            Self::BadArgumentCount => "BadArgs",
+            Self::ProtocolViolation(_) => "ProtoVio",
+        }
+    }
+    
+    /// Parse a failure reason from its wire representation tag.
+    pub fn from_tag(tag: &str) -> Result<Self> {
+        match tag {
+            "Trapped" => Ok(Self::AppTrapped),
+            "NoFuel" => Ok(Self::OutOfFuel),
+            "OOM" => Ok(Self::OutOfMemory),
+            "NoInstance" => Ok(Self::InstanceNotFound),
+            "NoMethod" => Ok(Self::MethodNotFound),
+            "BadArgs" => Ok(Self::BadArgumentCount),
+            "ProtoVio" => Ok(Self::ProtocolViolation("Remote protocol violation".into())),
+            other => Err(RpcError::UnknownVariant(format!("FailureReason: {}", other))),
+        }
+    }
+}

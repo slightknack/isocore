@@ -8,7 +8,7 @@ anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 wasmtime = { workspace = true, features = ["component-model"] }
 wasmtime-wasi = { workspace = true }
-async-trait = "0.1"
+async-trait = { workspace = true }
 log = "0.4"
 futures = "0.3"
 

@@ -1,4 +1,3 @@
-// --- crates/exorun/src/transport.rs ---
 //! # Transport Abstraction
 //!
 //! A minimal, async interface for moving bytes between runtimes.

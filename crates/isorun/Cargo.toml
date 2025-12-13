@@ -7,7 +7,7 @@ edition = "2024"
 # NOTE: For shared dependencies, add to [workspace.dependencies] in root Cargo.toml and use { workspace = true }
 anyhow = { workspace = true }
 anymap = "0.12.1"
-async-trait = "0.1.89"
+async-trait = { workspace = true }
 neopack = { path = "../neopack" }
 neorpc = { path = "../neorpc" }
 tokio = { workspace = true }

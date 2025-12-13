@@ -16,30 +16,31 @@ use neopack::Encoder;
 
 use wasmtime::component::Val;
 
-/// A partially decoded RPC Call header.
-///
-/// **Invariant**: The `args_decoder` points to a List container containing the arguments.
-pub struct CallFrame<'a> {
+/// Encodes an outbound Call frame.
+pub struct CallEncoder<'a> {
     pub seq: u64,
     pub target: &'a str,
     pub method: &'a str,
-    /// Use `decode_vals` with this decoder and the method signature.
-    pub args_decoder: Decoder<'a>,
+    pub args: &'a [Val],
 }
 
-impl<'a> CallFrame<'a> {
-    /// Encodes a Call frame onto the wire.
-    pub fn encode(enc: &mut Encoder, seq: u64, target: &str, method: &str, args: &[Val]) -> Result<()> {
+impl<'a> CallEncoder<'a> {
+    pub fn new(seq: u64, target: &'a str, method: &'a str, args: &'a [Val]) -> Self {
+        Self { seq, target, method, args }
+    }
+    
+    /// Encode this call into the encoder.
+    pub fn encode(&self, enc: &mut Encoder) -> Result<()> {
         enc.variant_begin("Call")?;
         enc.map_begin()?;
 
-        write_map_u64(enc, "seq", seq)?;
-        write_map_str(enc, "target", target)?;
-        write_map_str(enc, "method", method)?;
+        write_map_u64(enc, "seq", self.seq)?;
+        write_map_str(enc, "target", self.target)?;
+        write_map_str(enc, "method", self.method)?;
 
         enc.variant_begin("args")?;
         enc.list_begin()?;
-        for val in args {
+        for val in self.args {
             encode_val(enc, val)?;
         }
         enc.list_end()?;
@@ -49,8 +50,21 @@ impl<'a> CallFrame<'a> {
         enc.variant_end()?;
         Ok(())
     }
+}
 
-    /// Decodes a Call frame from the wire.
+/// Decodes an inbound Call frame.
+///
+/// **Invariant**: The `args` decoder points to a List container containing the arguments.
+pub struct CallDecoder<'a> {
+    pub seq: u64,
+    pub target: &'a str,
+    pub method: &'a str,
+    /// Use `decode_vals` with this decoder and the method signature.
+    pub args: Decoder<'a>,
+}
+
+impl<'a> CallDecoder<'a> {
+    /// Decode a Call frame from the decoder.
     pub fn decode(mut dec: Decoder<'a>) -> Result<Self> {
         let mut map = dec.map()?;
         let mut seq = None;
@@ -68,36 +82,37 @@ impl<'a> CallFrame<'a> {
             }
         }
 
-        Ok(CallFrame {
+        Ok(CallDecoder {
             seq: seq.ok_or(RpcError::ProtocolViolation("Missing seq".into()))?,
             target: target.ok_or(RpcError::ProtocolViolation("Missing target".into()))?,
             method: method.ok_or(RpcError::ProtocolViolation("Missing method".into()))?,
-            args_decoder: args_dec.ok_or(RpcError::ProtocolViolation("Missing args".into()))?,
+            args: args_dec.ok_or(RpcError::ProtocolViolation("Missing args".into()))?,
         })
     }
 }
 
-/// A partially decoded RPC Reply header.
-pub struct ReplyFrame<'a> {
+/// Encodes an outbound Reply frame (success).
+pub struct ReplyOkEncoder<'a> {
     pub seq: u64,
-    /// The result of the call.
-    /// - `Ok(Decoder)`: Success. Points to a List container of results.
-    /// - `Err(FailureReason)`: System failure.
-    pub status: std::result::Result<Decoder<'a>, FailureReason>,
+    pub results: &'a [Val],
 }
 
-impl<'a> ReplyFrame<'a> {
-    /// Encodes a successful Reply frame onto the wire.
-    pub fn encode_success(enc: &mut Encoder, seq: u64, results: &[Val]) -> Result<()> {
+impl<'a> ReplyOkEncoder<'a> {
+    pub fn new(seq: u64, results: &'a [Val]) -> Self {
+        Self { seq, results }
+    }
+    
+    /// Encode this success reply into the encoder.
+    pub fn encode(&self, enc: &mut Encoder) -> Result<()> {
         enc.variant_begin("Reply")?;
         enc.result_ok_begin()?;
         enc.map_begin()?;
 
-        write_map_u64(enc, "seq", seq)?;
+        write_map_u64(enc, "seq", self.seq)?;
 
         enc.variant_begin("results")?;
         enc.list_begin()?;
-        for val in results {
+        for val in self.results {
             encode_val(enc, val)?;
         }
         enc.list_end()?;
@@ -108,25 +123,29 @@ impl<'a> ReplyFrame<'a> {
         enc.variant_end()?;
         Ok(())
     }
+}
 
-    /// Encodes a failure Reply frame onto the wire.
-    pub fn encode_failure(enc: &mut Encoder, seq: u64, reason: &FailureReason) -> Result<()> {
+/// Encodes an outbound Reply frame (failure).
+pub struct ReplyErrEncoder {
+    pub seq: u64,
+    pub reason: FailureReason,
+}
+
+impl ReplyErrEncoder {
+    pub fn new(seq: u64, reason: FailureReason) -> Self {
+        Self { seq, reason }
+    }
+    
+    /// Encode this failure reply into the encoder.
+    pub fn encode(&self, enc: &mut Encoder) -> Result<()> {
         enc.variant_begin("Reply")?;
         enc.result_err_begin()?;
         enc.map_begin()?;
 
-        write_map_u64(enc, "seq", seq)?;
+        write_map_u64(enc, "seq", self.seq)?;
 
         enc.variant_begin("reason")?;
-        match reason {
-            FailureReason::AppTrapped => { enc.variant_begin("Trapped")?; enc.unit()?; enc.variant_end()?; },
-            FailureReason::OutOfFuel => { enc.variant_begin("NoFuel")?; enc.unit()?; enc.variant_end()?; },
-            FailureReason::OutOfMemory => { enc.variant_begin("OOM")?; enc.unit()?; enc.variant_end()?; },
-            FailureReason::InstanceNotFound => { enc.variant_begin("NoInstance")?; enc.unit()?; enc.variant_end()?; },
-            FailureReason::MethodNotFound => { enc.variant_begin("NoMethod")?; enc.unit()?; enc.variant_end()?; },
-            FailureReason::BadArgumentCount => { enc.variant_begin("BadArgs")?; enc.unit()?; enc.variant_end()?; },
-            FailureReason::ProtocolViolation(_) => { enc.variant_begin("ProtoVio")?; enc.unit()?; enc.variant_end()?; },
-        }
+        encode_unit_variant(enc, self.reason.as_tag())?;
         enc.variant_end()?;
 
         enc.map_end()?;
@@ -134,120 +153,85 @@ impl<'a> ReplyFrame<'a> {
         enc.variant_end()?;
         Ok(())
     }
+}
 
-    /// Decodes a Reply frame from the wire.
+/// Decodes an inbound Reply frame.
+pub struct ReplyDecoder<'a> {
+    pub seq: u64,
+    /// The result of the call.
+    /// - `Ok(Decoder)`: Success. Points to a List container of results.
+    /// - `Err(FailureReason)`: System failure.
+    pub status: std::result::Result<Decoder<'a>, FailureReason>,
+}
+
+impl<'a> ReplyDecoder<'a> {
+    /// Decode a Reply frame from the decoder.
     pub fn decode(mut dec: Decoder<'a>) -> Result<Self> {
         let res = dec.result()?;
         match res {
-            Ok(ok_body) => decode_reply_success(ok_body),
-            Err(err_body) => decode_reply_failure(err_body),
+            Ok(ok_body) => Self::decode_success(ok_body),
+            Err(err_body) => Self::decode_failure(err_body),
         }
+    }
+    
+    fn decode_success(mut ok_body: Decoder<'a>) -> Result<Self> {
+        let mut map = ok_body.map()?;
+        let mut seq = None;
+        let mut results_dec = None;
+
+        while let Some((key, mut val)) = map.next()? {
+            match key {
+                "seq" => seq = Some(val.u64()?),
+                "results" => results_dec = Some(val),
+                _ => val.skip()?,
+            }
+        }
+
+        Ok(ReplyDecoder {
+            seq: seq.ok_or(RpcError::ProtocolViolation("Missing seq".into()))?,
+            status: Ok(results_dec.ok_or(RpcError::ProtocolViolation("Missing results".into()))?),
+        })
+    }
+    
+    fn decode_failure(mut err_body: Decoder<'a>) -> Result<Self> {
+        let mut map = err_body.map()?;
+        let mut seq = None;
+        let mut reason = None;
+
+        while let Some((key, mut val)) = map.next()? {
+            match key {
+                "seq" => seq = Some(val.u64()?),
+                "reason" => {
+                    let tag = decode_unit_variant(&mut val)?;
+                    reason = Some(FailureReason::from_tag(tag)?);
+                }
+                _ => val.skip()?,
+            }
+        }
+
+        Ok(ReplyDecoder {
+            seq: seq.ok_or(RpcError::ProtocolViolation("Missing seq".into()))?,
+            status: Err(reason.ok_or(RpcError::ProtocolViolation("Missing reason".into()))?),
+        })
     }
 }
 
-/// The top-level frame of an RPC message.
+/// Top-level frame decoder.
 pub enum RpcFrame<'a> {
-    Call(CallFrame<'a>),
-    Reply(ReplyFrame<'a>),
+    Call(CallDecoder<'a>),
+    Reply(ReplyDecoder<'a>),
 }
 
 impl<'a> RpcFrame<'a> {
-    /// Decodes an RPC frame from the wire.
+    /// Decode an RPC frame from the decoder.
     pub fn decode(dec: &mut Decoder<'a>) -> Result<Self> {
         let (msg_type, body) = dec.variant()?;
-
         match msg_type {
-            "Call" => Ok(RpcFrame::Call(CallFrame::decode(body)?)),
-            "Reply" => Ok(RpcFrame::Reply(ReplyFrame::decode(body)?)),
+            "Call" => Ok(RpcFrame::Call(CallDecoder::decode(body)?)),
+            "Reply" => Ok(RpcFrame::Reply(ReplyDecoder::decode(body)?)),
             _ => Err(RpcError::UnknownVariant(format!("Top-level frame: {}", msg_type))),
         }
     }
-}
-
-fn decode_reply_success<'a>(mut ok_body: Decoder<'a>) -> Result<ReplyFrame<'a>> {
-    let mut map = ok_body.map()?;
-    let mut seq = None;
-    let mut results_dec = None;
-
-    while let Some((key, mut val)) = map.next()? {
-        match key {
-            "seq" => seq = Some(val.u64()?),
-            "results" => results_dec = Some(val),
-            _ => val.skip()?,
-        }
-    }
-
-    Ok(ReplyFrame {
-        seq: seq.ok_or(RpcError::ProtocolViolation("Missing seq".into()))?,
-        status: Ok(results_dec.ok_or(RpcError::ProtocolViolation("Missing results".into()))?),
-    })
-}
-
-fn decode_reply_failure<'a>(mut err_body: Decoder<'a>) -> Result<ReplyFrame<'a>> {
-    let mut map = err_body.map()?;
-    let mut seq = None;
-    let mut reason = None;
-
-    while let Some((key, mut val)) = map.next()? {
-        match key {
-            "seq" => seq = Some(val.u64()?),
-            "reason" => {
-                let (r_type, mut r_val) = val.variant()?;
-                r_val.unit()?;
-                
-                reason = Some(match r_type {
-                    "Trapped" => FailureReason::AppTrapped,
-                    "NoFuel" => FailureReason::OutOfFuel,
-                    "OOM" => FailureReason::OutOfMemory,
-                    "NoInstance" => FailureReason::InstanceNotFound,
-                    "NoMethod" => FailureReason::MethodNotFound,
-                    "BadArgs" => FailureReason::BadArgumentCount,
-                    "ProtoVio" => FailureReason::ProtocolViolation("Remote protocol violation".into()),
-                    other => return Err(RpcError::UnknownVariant(format!("FailureReason: {}", other))),
-                });
-            }
-            _ => val.skip()?,
-        }
-    }
-
-    Ok(ReplyFrame {
-        seq: seq.ok_or(RpcError::ProtocolViolation("Missing seq".into()))?,
-        status: Err(reason.ok_or(RpcError::ProtocolViolation("Missing reason".into()))?),
-    })
-}
-
-fn write_map_u64(enc: &mut Encoder, key: &str, val: u64) -> Result<()> {
-    enc.variant_begin(key)?;
-    enc.u64(val)?;
-    enc.variant_end()?;
-    Ok(())
-}
-
-fn write_map_str(enc: &mut Encoder, key: &str, val: &str) -> Result<()> {
-    enc.variant_begin(key)?;
-    enc.str(val)?;
-    enc.variant_end()?;
-    Ok(())
-}
-
-/// Legacy function for backwards compatibility.
-pub fn encode_call(enc: &mut Encoder, seq: u64, target: &str, method: &str, args: &[Val]) -> Result<()> {
-    CallFrame::encode(enc, seq, target, method, args)
-}
-
-/// Legacy function for backwards compatibility.
-pub fn encode_reply_success(enc: &mut Encoder, seq: u64, results: &[Val]) -> Result<()> {
-    ReplyFrame::encode_success(enc, seq, results)
-}
-
-/// Legacy function for backwards compatibility.
-pub fn encode_reply_failure(enc: &mut Encoder, seq: u64, reason: &FailureReason) -> Result<()> {
-    ReplyFrame::encode_failure(enc, seq, reason)
-}
-
-/// Legacy function for backwards compatibility.
-pub fn decode_frame<'a>(dec: &mut Decoder<'a>) -> Result<RpcFrame<'a>> {
-    RpcFrame::decode(dec)
 }
 
 /// Decodes just the sequence number from a raw frame.
@@ -273,4 +257,35 @@ pub fn decode_seq(bytes: &[u8]) -> Result<u64> {
     }
 
     Err(RpcError::ProtocolViolation("Missing seq".into()))
+}
+
+// Helper functions
+
+fn write_map_u64(enc: &mut Encoder, key: &str, val: u64) -> Result<()> {
+    enc.variant_begin(key)?;
+    enc.u64(val)?;
+    enc.variant_end()?;
+    Ok(())
+}
+
+fn write_map_str(enc: &mut Encoder, key: &str, val: &str) -> Result<()> {
+    enc.variant_begin(key)?;
+    enc.str(val)?;
+    enc.variant_end()?;
+    Ok(())
+}
+
+/// Encode a unit variant (variant with no payload).
+fn encode_unit_variant(enc: &mut Encoder, tag: &str) -> Result<()> {
+    enc.variant_begin(tag)?;
+    enc.unit()?;
+    enc.variant_end()?;
+    Ok(())
+}
+
+/// Decode a unit variant and return its tag.
+fn decode_unit_variant<'a>(dec: &mut Decoder<'a>) -> Result<&'a str> {
+    let (tag, mut body) = dec.variant()?;
+    body.unit()?;
+    Ok(tag)
 }

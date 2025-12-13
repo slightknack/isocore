@@ -7,3 +7,5 @@ edition = "2024"
 async-trait = { workspace = true }
 wasmtime = { workspace = true, features = ["component-model"] }
 wasmtime-wasi = { workspace = true }
+neopack = { path = "../neopack" }
+neorpc = { path = "../neorpc" }

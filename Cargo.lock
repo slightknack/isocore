@@ -521,6 +521,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "exorun"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "neopack",
+ "neorpc",
+ "wasmtime",
+ "wasmtime-wasi",
+]
+
+[[package]]
 name = "fallible-iterator"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
