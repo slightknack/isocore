@@ -1,13 +1,13 @@
-// File: crates/neorpc/src/tests.rs
 use crate::*;
-use neopack::{Encoder, Decoder};
-use wasmtime::component::{Val, Type, Component};
-use wasmtime::component::types::ComponentItem;
-use wasmtime::Engine;
 
-// ============================================================================
-//  TYPE CONSTRUCTION HELPER
-// ============================================================================
+use neopack::Decoder;
+use neopack::Encoder;
+
+use wasmtime::Engine;
+use wasmtime::component::Component;
+use wasmtime::component::Type;
+use wasmtime::component::Val;
+use wasmtime::component::types::ComponentItem;
 
 struct TypeContext {
     #[allow(dead_code)]
@@ -67,7 +67,6 @@ impl TypeContext {
     }
 }
 
-/// Helper to roundtrip a value and assert debug equality
 fn assert_roundtrip(val: Val, ty: Type) {
     let mut enc = Encoder::new();
     encode_val(&mut enc, &val).expect("Encoding failed");
@@ -78,10 +77,6 @@ fn assert_roundtrip(val: Val, ty: Type) {
 
     assert_eq!(format!("{:?}", val), format!("{:?}", decoded));
 }
-
-// ============================================================================
-//  1. SCALAR TESTS (5 Tests)
-// ============================================================================
 
 #[test]
 fn test_scalars_bool() {
@@ -117,10 +112,6 @@ fn test_scalars_char_string() {
     assert_roundtrip(Val::String("Hello World 🚀".into()), Type::String);
 }
 
-// ============================================================================
-//  2. COMPOUND STRUCTURES (10 Tests)
-// ============================================================================
-
 #[test]
 fn test_list_roundtrip() {
     let ctx = TypeContext::new(r#"(type $t (list u32))"#, &["t"]);
@@ -154,9 +145,7 @@ fn test_variant_roundtrip() {
     let ctx = TypeContext::new(r#"(type $t (variant (case "A" u32) (case "B")))"#, &["t"]);
     let ty = ctx.get(0);
 
-    // Payload
     assert_roundtrip(Val::Variant("A".into(), Some(Box::new(Val::U32(99)))), ty.clone());
-    // Unit
     assert_roundtrip(Val::Variant("B".into(), None), ty);
 }
 
@@ -201,14 +190,11 @@ fn test_nested_complex_structure() {
     let ty = ctx.get(0);
 
     let val = Val::List(vec![
-        // Case 1: Some(Tuple(1, 2))
         Val::Option(Some(Box::new(Val::Tuple(vec![
             Val::U32(1),
             Val::U32(2)
         ])))),
-        // Case 2: None
         Val::Option(None),
-        // Case 3: Some(Tuple(3, 4))
         Val::Option(Some(Box::new(Val::Tuple(vec![
             Val::U32(3),
             Val::U32(4)
@@ -225,15 +211,9 @@ fn test_empty_structures() {
         (type $f (flags "a"))
     "#, &["l", "f"]);
 
-    // Empty List
     assert_roundtrip(Val::List(vec![]), ctx.get(0));
-    // Empty Flags
     assert_roundtrip(Val::Flags(vec![]), ctx.get(1));
 }
-
-// ============================================================================
-//  3. RPC MESSAGE FLOW (4 Tests)
-// ============================================================================
 
 #[test]
 fn test_rpc_call_roundtrip() {
@@ -302,7 +282,6 @@ fn test_rpc_reply_failure_roundtrip() {
 
 #[test]
 fn test_rpc_sequence_skippable() {
-    // Write a Call followed immediately by a Reply
     let mut enc = Encoder::new();
     encode_call(&mut enc, 1, "a", "b", &[]).unwrap();
     encode_reply_failure(&mut enc, 1, &FailureReason::AppTrapped).unwrap();
@@ -310,15 +289,9 @@ fn test_rpc_sequence_skippable() {
     let bytes = enc.into_bytes().unwrap();
     let mut dec = Decoder::new(&bytes);
 
-    // Read 1
     assert!(matches!(decode_frame(&mut dec).unwrap(), RpcFrame::Call(_)));
-    // Read 2
     assert!(matches!(decode_frame(&mut dec).unwrap(), RpcFrame::Reply(_)));
 }
-
-// ============================================================================
-//  4. VALIDATION ERRORS (11 Tests)
-// ============================================================================
 
 #[test]
 fn test_err_missing_field() {
@@ -326,7 +299,7 @@ fn test_err_missing_field() {
     let ty = ctx.get(0);
 
     let mut enc = Encoder::new();
-    enc.map_begin().unwrap(); enc.map_end().unwrap(); // Empty map
+    enc.map_begin().unwrap(); enc.map_end().unwrap();
     let bytes = enc.into_bytes().unwrap();
 
     match decode_val(&mut Decoder::new(&bytes), &ty) {
@@ -367,13 +340,10 @@ fn test_err_unknown_flag() {
 
 #[test]
 fn test_err_type_mismatch_scalar() {
-    // Expect U32, get String
     let mut enc = Encoder::new();
     enc.str("not int").unwrap();
     let bytes = enc.into_bytes().unwrap();
 
-    // The neopack decoder itself will likely fail with InvalidTag when trying to read u32 from string tag,
-    // which wraps into RpcError::Serialization
     match decode_val(&mut Decoder::new(&bytes), &Type::U32) {
         Err(RpcError::Serialization(_)) => {},
         _ => panic!("Expected Serialization error (InvalidTag)"),
@@ -397,8 +367,6 @@ fn test_err_tuple_too_short() {
 
 #[test]
 fn test_err_tuple_too_long() {
-    // Tuple decoding currently consumes exactly N items.
-    // This test ensures no panic/error occurs if extra items exist (they are ignored),
     pass();
 }
 
@@ -408,10 +376,8 @@ fn pass() {}
 fn test_err_rpc_args_count_mismatch_too_few() {
     let ctx = TypeContext::new(r#"(type $t (list u32))"#, &["t"]);
     let arg_ty = ctx.get(0);
-    // Expect 2 args
     let types = vec![arg_ty.clone(), arg_ty.clone()];
 
-    // Provide 1
     let mut enc = Encoder::new();
     enc.list_begin().unwrap();
     enc.list_begin().unwrap(); enc.u32(1).unwrap(); enc.list_end().unwrap();
@@ -428,10 +394,8 @@ fn test_err_rpc_args_count_mismatch_too_few() {
 fn test_err_rpc_args_count_mismatch_too_many() {
     let ctx = TypeContext::new(r#"(type $t u32)"#, &["t"]);
     let arg_ty = ctx.get(0);
-    // Expect 1 arg
     let types = vec![arg_ty];
 
-    // Provide 2
     let mut enc = Encoder::new();
     enc.list_begin().unwrap();
     enc.u32(1).unwrap();
@@ -450,7 +414,6 @@ fn test_err_rpc_protocol_missing_seq() {
     let mut enc = Encoder::new();
     enc.variant_begin("Call").unwrap();
     enc.map_begin().unwrap();
-    // Missing seq
     write_map_str(&mut enc, "target", "t").unwrap();
     write_map_str(&mut enc, "method", "m").unwrap();
     enc.variant_begin("args").unwrap(); enc.list_begin().unwrap(); enc.list_end().unwrap(); enc.variant_end().unwrap();
@@ -470,7 +433,6 @@ fn test_err_rpc_protocol_missing_target() {
     enc.variant_begin("Call").unwrap();
     enc.map_begin().unwrap();
     write_map_u64(&mut enc, "seq", 1).unwrap();
-    // Missing target
     write_map_str(&mut enc, "method", "m").unwrap();
     enc.variant_begin("args").unwrap(); enc.list_begin().unwrap(); enc.list_end().unwrap(); enc.variant_end().unwrap();
     enc.map_end().unwrap();
@@ -490,7 +452,6 @@ fn test_err_rpc_protocol_missing_results_in_reply() {
     enc.result_ok_begin().unwrap();
     enc.map_begin().unwrap();
     write_map_u64(&mut enc, "seq", 1).unwrap();
-    // Missing "results"
     enc.map_end().unwrap();
     enc.result_ok_end().unwrap();
     enc.variant_end().unwrap();
@@ -502,16 +463,190 @@ fn test_err_rpc_protocol_missing_results_in_reply() {
     }
 }
 
-// Helpers for manual construction
 fn write_map_u64(enc: &mut Encoder, key: &str, val: u64) -> Result<()> {
     enc.variant_begin(key)?;
     enc.u64(val)?;
     enc.variant_end()?;
     Ok(())
 }
+
 fn write_map_str(enc: &mut Encoder, key: &str, val: &str) -> Result<()> {
     enc.variant_begin(key)?;
     enc.str(val)?;
     enc.variant_end()?;
     Ok(())
+}
+
+#[test]
+fn test_boundary_recursion_limit_just_under() {
+    let mut val = Val::U32(42);
+    for _ in 0..63 {
+        val = Val::List(vec![val]);
+    }
+    
+    let mut enc = Encoder::new();
+    encode_val(&mut enc, &val).expect("Should succeed at depth 63");
+}
+
+#[test]
+fn test_boundary_recursion_limit_exactly_at() {
+    let mut val = Val::U32(42);
+    for _ in 0..64 {
+        val = Val::List(vec![val]);
+    }
+    
+    let mut enc = Encoder::new();
+    encode_val(&mut enc, &val).expect("Should succeed at depth 64");
+}
+
+#[test]
+fn test_boundary_recursion_limit_exceeded() {
+    let mut val = Val::U32(42);
+    for _ in 0..65 {
+        val = Val::List(vec![val]);
+    }
+    
+    let mut enc = Encoder::new();
+    match encode_val(&mut enc, &val) {
+        Err(RpcError::RecursionLimitExceeded) => {},
+        _ => panic!("Expected RecursionLimitExceeded at depth 65"),
+    }
+}
+
+#[test]
+fn test_boundary_empty_strings_in_rpc_call() {
+    let mut enc = Encoder::new();
+    encode_call(&mut enc, 0, "", "", &[]).unwrap();
+    let bytes = enc.into_bytes().unwrap();
+    
+    let mut dec = Decoder::new(&bytes);
+    match decode_frame(&mut dec).unwrap() {
+        RpcFrame::Call(c) => {
+            assert_eq!(c.seq, 0);
+            assert_eq!(c.target, "");
+            assert_eq!(c.method, "");
+        }
+        _ => panic!("Expected Call"),
+    }
+}
+
+#[test]
+fn test_boundary_result_unit_unit() {
+    let ctx = TypeContext::new(r#"(type $t (result))"#, &["t"]);
+    let ty = ctx.get(0);
+    
+    assert_roundtrip(Val::Result(Ok(None)), ty.clone());
+    assert_roundtrip(Val::Result(Err(None)), ty);
+}
+
+#[test]
+fn test_boundary_duplicate_flags() {
+    let ctx = TypeContext::new(r#"(type $t (flags "a" "b"))"#, &["t"]);
+    let ty = ctx.get(0);
+    
+    let mut enc = Encoder::new();
+    enc.list_begin().unwrap();
+    enc.str("a").unwrap();
+    enc.str("a").unwrap();
+    enc.str("b").unwrap();
+    enc.list_end().unwrap();
+    let bytes = enc.into_bytes().unwrap();
+    
+    let mut dec = Decoder::new(&bytes);
+    let decoded = decode_val(&mut dec, &ty).unwrap();
+    
+    if let Val::Flags(flags) = decoded {
+        assert_eq!(flags.len(), 3);
+        assert_eq!(flags, vec!["a".to_string(), "a".to_string(), "b".to_string()]);
+    } else {
+        panic!("Expected Flags");
+    }
+}
+
+#[test]
+fn test_boundary_record_with_extra_unknown_fields() {
+    let ctx = TypeContext::new(r#"(type $t (record (field "x" u32)))"#, &["t"]);
+    let ty = ctx.get(0);
+    
+    let mut enc = Encoder::new();
+    enc.map_begin().unwrap();
+    enc.variant_begin("x").unwrap(); enc.u32(10).unwrap(); enc.variant_end().unwrap();
+    enc.variant_begin("unknown").unwrap(); enc.u32(99).unwrap(); enc.variant_end().unwrap();
+    enc.variant_begin("another").unwrap(); enc.str("ignored").unwrap(); enc.variant_end().unwrap();
+    enc.map_end().unwrap();
+    let bytes = enc.into_bytes().unwrap();
+    
+    let mut dec = Decoder::new(&bytes);
+    let decoded = decode_val(&mut dec, &ty).unwrap();
+    
+    if let Val::Record(fields) = decoded {
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].0, "x");
+    } else {
+        panic!("Expected Record");
+    }
+}
+
+#[test]
+fn test_boundary_single_char_variant_name() {
+    let ctx = TypeContext::new(r#"(type $t (variant (case "a")))"#, &["t"]);
+    let ty = ctx.get(0);
+    
+    assert_roundtrip(Val::Variant("a".into(), None), ty);
+}
+
+#[test]
+fn test_boundary_rpc_call_with_unknown_header_fields() {
+    let mut enc = Encoder::new();
+    enc.variant_begin("Call").unwrap();
+    enc.map_begin().unwrap();
+    write_map_u64(&mut enc, "seq", 100).unwrap();
+    write_map_str(&mut enc, "target", "svc").unwrap();
+    write_map_str(&mut enc, "method", "test").unwrap();
+    write_map_str(&mut enc, "future_field_1", "ignored").unwrap();
+    write_map_u64(&mut enc, "future_field_2", 9999).unwrap();
+    enc.variant_begin("args").unwrap(); enc.list_begin().unwrap(); enc.list_end().unwrap(); enc.variant_end().unwrap();
+    enc.map_end().unwrap();
+    enc.variant_end().unwrap();
+    
+    let bytes = enc.into_bytes().unwrap();
+    let mut dec = Decoder::new(&bytes);
+    
+    match decode_frame(&mut dec).unwrap() {
+        RpcFrame::Call(c) => {
+            assert_eq!(c.seq, 100);
+            assert_eq!(c.target, "svc");
+            assert_eq!(c.method, "test");
+        }
+        _ => panic!("Expected Call"),
+    }
+}
+
+#[test]
+fn test_boundary_record_field_ordering_independence() {
+    let ctx = TypeContext::new(
+        r#"(type $t (record (field "a" u32) (field "b" string) (field "c" bool)))"#,
+        &["t"]
+    );
+    let ty = ctx.get(0);
+    
+    let mut enc = Encoder::new();
+    enc.map_begin().unwrap();
+    enc.variant_begin("c").unwrap(); enc.bool(true).unwrap(); enc.variant_end().unwrap();
+    enc.variant_begin("a").unwrap(); enc.u32(42).unwrap(); enc.variant_end().unwrap();
+    enc.variant_begin("b").unwrap(); enc.str("hello").unwrap(); enc.variant_end().unwrap();
+    enc.map_end().unwrap();
+    let bytes = enc.into_bytes().unwrap();
+    
+    let mut dec = Decoder::new(&bytes);
+    let decoded = decode_val(&mut dec, &ty).unwrap();
+    
+    if let Val::Record(fields) = decoded {
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].0, "a");
+        assert_eq!(fields[1].0, "b");
+        assert_eq!(fields[2].0, "c");
+    } else {
+        panic!("Expected Record");
+    }
 }
