@@ -1,0 +1,11 @@
+[package]
+name = "neorpc"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+neopack = { path = "../neopack" }
+wasmtime = { workspace = true, features = ["component-model"] }
+
+[dev-dependencies]
+anyhow = { workspace = true }

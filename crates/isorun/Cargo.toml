@@ -8,8 +8,8 @@ edition = "2024"
 anyhow = { workspace = true }
 anymap = "0.12.1"
 async-trait = "0.1.89"
-isopack = { path = "../isopack" }
-isorpc = { path = "../isorpc" }
+# isopack = { path = "../isopack" }
+# isorpc = { path = "../isorpc" }
 tokio = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }

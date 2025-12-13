@@ -908,26 +908,12 @@ name = "isocore"
 version = "0.1.0"
 
 [[package]]
-name = "isopack"
-version = "0.1.0"
-
-[[package]]
-name = "isorpc"
-version = "0.1.0"
-dependencies = [
- "isopack",
- "wasmtime",
-]
-
-[[package]]
 name = "isorun"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "anymap",
  "async-trait",
- "isopack",
- "isorpc",
  "tokio",
  "wasmtime",
  "wasmtime-wasi",
@@ -1099,6 +1085,15 @@ dependencies = [
 [[package]]
 name = "neopack"
 version = "0.1.0"
+
+[[package]]
+name = "neorpc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "neopack",
+ "wasmtime",
+]
 
 [[package]]
 name = "object"
