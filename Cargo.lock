@@ -527,6 +527,7 @@ dependencies = [
  "async-trait",
  "neopack",
  "neorpc",
+ "tokio",
  "wasmtime",
  "wasmtime-wasi",
 ]
