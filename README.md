@@ -1,3 +1,7 @@
+> License status: Source available.
+> 
+> While you are welcome to read and run the code in this project for your own personal enjoyment, I am not accepting issues or contributions at this time. I will close any issues or contributions opened. I would, however, love to chat about this project with you. Feel free to reach out!
+
 # guide to home.isaac.sh
 
 - Apps are located in `apps/*`.
