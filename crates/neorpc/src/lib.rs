@@ -26,6 +26,7 @@ pub use frame::encode_call;
 pub use frame::encode_reply_success;
 pub use frame::encode_reply_failure;
 pub use frame::decode_frame;
+pub use frame::decode_seq;
 pub use codec::encode_val;
 pub use codec::decode_val;
 pub use codec::decode_vals;

@@ -125,6 +125,7 @@ impl<'a> ReplyFrame<'a> {
             FailureReason::InstanceNotFound => { enc.variant_begin("NoInstance")?; enc.unit()?; enc.variant_end()?; },
             FailureReason::MethodNotFound => { enc.variant_begin("NoMethod")?; enc.unit()?; enc.variant_end()?; },
             FailureReason::BadArgumentCount => { enc.variant_begin("BadArgs")?; enc.unit()?; enc.variant_end()?; },
+            FailureReason::ProtocolViolation(_) => { enc.variant_begin("ProtoVio")?; enc.unit()?; enc.variant_end()?; },
         }
         enc.variant_end()?;
 
@@ -201,6 +202,7 @@ fn decode_reply_failure<'a>(mut err_body: Decoder<'a>) -> Result<ReplyFrame<'a>>
                     "NoInstance" => FailureReason::InstanceNotFound,
                     "NoMethod" => FailureReason::MethodNotFound,
                     "BadArgs" => FailureReason::BadArgumentCount,
+                    "ProtoVio" => FailureReason::ProtocolViolation("Remote protocol violation".into()),
                     other => return Err(RpcError::UnknownVariant(format!("FailureReason: {}", other))),
                 });
             }
@@ -246,4 +248,29 @@ pub fn encode_reply_failure(enc: &mut Encoder, seq: u64, reason: &FailureReason)
 /// Legacy function for backwards compatibility.
 pub fn decode_frame<'a>(dec: &mut Decoder<'a>) -> Result<RpcFrame<'a>> {
     RpcFrame::decode(dec)
+}
+
+/// Decodes just the sequence number from a raw frame.
+/// This is useful for routing replies when the full decoding might fail.
+pub fn decode_seq(bytes: &[u8]) -> Result<u64> {
+    let mut dec = Decoder::new(bytes);
+    let (msg_type, mut body) = dec.variant()?;
+    let mut map = match msg_type {
+        "Call" => body.map()?,
+        "Reply" => match body.result()? {
+            Ok(mut ok_body) => ok_body.map()?,
+            Err(mut err_body) => err_body.map()?,
+        },
+        _ => return Err(RpcError::UnknownVariant(format!("Top-level frame: {}", msg_type))),
+    };
+
+    while let Some((key, mut val)) = map.next()? {
+        if key == "seq" {
+            return Ok(val.u64()?);
+        } else {
+            val.skip()?;
+        }
+    }
+
+    Err(RpcError::ProtocolViolation("Missing seq".into()))
 }

@@ -24,6 +24,14 @@ pub enum RpcError {
     RecursionLimitExceeded,
 }
 
+impl std::fmt::Display for RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+impl std::error::Error for RpcError {}
+
 impl From<NeoError> for RpcError {
     fn from(e: NeoError) -> Self { Self::Serialization(e) }
 }
@@ -49,4 +57,6 @@ pub enum FailureReason {
     MethodNotFound,
     /// Arguments provided did not match the method signature.
     BadArgumentCount,
+    /// The RPC frame was malformed.
+    ProtocolViolation(String),
 }

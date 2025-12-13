@@ -1,0 +1,25 @@
+[package]
+name = "neorun"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+wasmtime = { workspace = true, features = ["component-model"] }
+wasmtime-wasi = { workspace = true }
+async-trait = "0.1"
+log = "0.4"
+futures = "0.3"
+
+neopack = { path = "../neopack" }
+neorpc = { path = "../neorpc" }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+# The test helper needs wasmtime with extra features.
+# We define it here explicitly.
+wasmtime = { workspace = true, features = ["component-model", "wat"] }
+wit-component = "0.205.0" # This is a binary, but we can use it as a library
+wit-parser = { version = "0.205.0" }
