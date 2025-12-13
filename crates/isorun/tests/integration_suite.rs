@@ -182,7 +182,7 @@ async fn test_remote_peer_mock() -> anyhow::Result<()> {
     let _instance = InstanceBuilder::new(&rt, app_id)
         .link_remote("test:demo/math", RemoteAddr {
             peer: peer_id,
-            remote_instance: "math-service-on-mars".into()
+            target_id: "math-service-on-mars".into()
         }).await?
         .instantiate().await?;
 

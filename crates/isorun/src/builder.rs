@@ -1,13 +1,32 @@
-//! InstanceBuilder for wiring up imports and creating instances
+//! Instance builder for wiring up imports.
+//!
+//! The `InstanceBuilder` provides a fluent API for configuring and instantiating
+//! WebAssembly components with various linking strategies.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! # use isorun::{Runtime, InstanceBuilder, Linkable, Budget};
+//! # async fn example(rt: Runtime, app_id: isorun::AppId) -> anyhow::Result<()> {
+//! let instance = InstanceBuilder::new(&rt, app_id)
+//!     .budget(Budget::standard())
+//!     .link_system("wasi:filesystem", MyFilesystem)
+//!     .instantiate()
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::Result;
+
 use tokio::sync::Mutex;
-use wasmtime::component::Linker;
+
 use wasmtime::Store;
+use wasmtime::component::Linker;
 
 use crate::context::Budget;
 use crate::context::ContextBuilder;
@@ -15,33 +34,44 @@ use crate::context::IsorunCtx;
 use crate::handles::AppId;
 use crate::handles::RemoteAddr;
 use crate::instance::InstanceHandle;
-use crate::rpc::encode_math_add_args;
-use crate::rpc::RpcCall;
-use crate::rpc::RpcResponse;
 use crate::runtime::Runtime;
 use crate::traits::SystemComponent;
 use crate::traits::Transport;
 
-/// What are we linking an import to?
+/// The three strategies for linking an import.
+///
+/// Each strategy has different performance and isolation characteristics:
+///
+/// - **System**: Fastest (native Rust), no isolation
+/// - **LocalInstance**: Fast (same process), memory isolation
+/// - **Remote**: Slowest (network), full process isolation
 #[derive(Clone)]
 pub enum Linkable {
-    /// A local Rust implementation (System).
+    /// A local Rust implementation (System component).
+    ///
+    /// This is the fastest option - calls go directly to Rust code with no
+    /// serialization overhead.
     System(Arc<dyn SystemComponent>),
 
-    /// Another running Wasm instance in the same process.
-    /// (Direct, fast memory access).
+    /// Another Wasm instance in the same process.
+    ///
+    /// Calls are bridged through host functions, providing memory isolation
+    /// while staying in-process.
     LocalInstance(InstanceHandle),
 
-    /// A remote instance accessed via a generic Transport.
-    /// The Runtime handles the ABI serialization automatically.
+    /// A remote instance accessed via a Transport.
+    ///
+    /// Calls are serialized to bytes, sent over the transport, and deserialized
+    /// on the remote peer. Full process and network isolation.
     Remote {
-        /// The pipe to send bytes through.
+        /// The transport to send RPC bytes through.
         transport: Arc<dyn Transport>,
-        /// The opaque ID the remote peer uses to find the target instance
-        remote_instance: String,
+        /// The target identifier on the remote peer.
+        target_id: String,
     },
 }
 
+/// Fluent builder for configuring and instantiating components.
 pub struct InstanceBuilder<'a> {
     rt: &'a Runtime,
     app_id: AppId,
@@ -50,6 +80,9 @@ pub struct InstanceBuilder<'a> {
 }
 
 impl<'a> InstanceBuilder<'a> {
+    /// Create a new builder for the given app.
+    ///
+    /// Starts with default budget and no imports linked.
     pub fn new(rt: &'a Runtime, app_id: AppId) -> Self {
         Self {
             rt,
@@ -59,19 +92,24 @@ impl<'a> InstanceBuilder<'a> {
         }
     }
 
+    /// Set the resource budget for this instance.
+    ///
+    /// Controls fuel (instruction count) and memory limits.
     pub fn budget(mut self, budget: Budget) -> Self {
         self.budget = budget;
         self
     }
 
-    /// Link an import to a generic Linkable.
+    /// Link an import to a Linkable target.
+    ///
+    /// The `name` should match the import name in the component's WIT interface.
     pub fn link(mut self, name: &str, target: Linkable) -> Self {
         self.links.insert(name.to_string(), target);
         self
     }
 
-    /// Helper: Link to a specific Remote Address (Peer + Remote ID).
-    /// e.g. .link_remote("kv", RemoteAddr { peer: peer_tcp, remote_instance: "kv-primary" })
+    /// Helper: Link to a specific Remote Address (Peer + Target ID).
+    /// e.g. .link_remote("kv", RemoteAddr { peer: peer_tcp, target_id: "kv-primary" })
     pub async fn link_remote(
         mut self,
         name: &str,
@@ -82,18 +120,29 @@ impl<'a> InstanceBuilder<'a> {
 
         self.links.insert(name.to_string(), Linkable::Remote { 
             transport: transport.clone(),
-            remote_instance: addr.remote_instance,
+            target_id: addr.target_id,
         });
         Ok(self)
     }
 
-    /// Helper: Link to a local system implementation.
+    /// Link to a local system implementation (Rust code).
+    ///
+    /// This is a convenience wrapper around `.link()` for System components.
     pub fn link_system(mut self, name: &str, sys: impl SystemComponent) -> Self {
         self.links.insert(name.to_string(), Linkable::System(Arc::new(sys)));
         self
     }
 
-    /// Instantiate the App.
+    /// Instantiate the component with the configured links.
+    ///
+    /// This consumes the builder and returns a running instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The app hasn't been registered
+    /// - Linking fails (missing imports, type mismatches)
+    /// - Instantiation fails (start function traps, etc.)
     pub async fn instantiate(self) -> Result<InstanceHandle> {
         let apps = self.rt.inner.apps.lock().await;
         let component = apps.get(&self.app_id).ok_or_else(|| anyhow!("App not found"))?;
@@ -106,22 +155,27 @@ impl<'a> InstanceBuilder<'a> {
         let mut ctx_builder = ContextBuilder::new();
 
         // --- The Wiring Loop ---
-        let links = self.links;
-        for (name, target) in links {
+        let _links = self.links;
+        
+        // TODO: Implement generic linking
+        // For now, we only support System components
+        // Remote and LocalInstance linking will be added in later phases
+        
+        for (_name, target) in _links {
             match target {
                 Linkable::System(sys) => {
-                    // 1. Install definitions
                     sys.install(&mut linker)?;
-                    // 2. Configure context (WASI preopens, Auth, etc)
                     sys.configure(&mut ctx_builder)?;
                 }
-                Linkable::LocalInstance(handle) => {
-                    // Bridge local instances directly via host functions
-                    Self::link_local_instance(&mut linker, &name, handle)?;
+                Linkable::LocalInstance(_handle) => {
+                    // TODO: Generic local instance bridging
+                    // This requires dynamic component introspection
+                    anyhow::bail!("LocalInstance linking not yet implemented");
                 }
-                Linkable::Remote { transport, remote_instance } => {
-                    // Generate RPC stubs that serialize calls to bytes
-                    Self::link_remote_instance(&mut linker, &name, transport, &remote_instance)?;
+                Linkable::Remote { .. } => {
+                    // TODO: Generic RPC stub generation
+                    // This requires dynamic component introspection
+                    anyhow::bail!("Remote linking not yet implemented");
                 }
             }
         }
@@ -138,82 +192,5 @@ impl<'a> InstanceBuilder<'a> {
             store: Arc::new(Mutex::new(store)),
             instance,
         })
-    }
-
-    fn link_local_instance(
-        linker: &mut Linker<IsorunCtx>,
-        interface_name: &str,
-        handle: InstanceHandle,
-    ) -> Result<()> {
-        // For local instances, we need to bind the exported functions from the target instance
-        // to the imports of the current component. This requires dynamic function binding.
-        
-        // For the math interface, we need to bind the 'add' function
-        if interface_name == "test:demo/math" {
-            linker.instance("test:demo/math")?.func_wrap_async(
-                "add",
-                move |_caller: wasmtime::StoreContextMut<'_, IsorunCtx>, (a, b): (u32, u32)| {
-                    let handle = handle.clone();
-                    Box::new(async move {
-                        let mut lock = handle.store.lock().await;
-                        let math = handle.instance.get_typed_func::<(u32, u32), (u32,)>(&mut *lock, "test:demo#math")?;
-                        let (result,) = math.call_async(&mut *lock, (a, b)).await?;
-                        Ok((result,))
-                    })
-                },
-            )?;
-        } else if interface_name == "test:demo/kv" {
-            // Handle KV interface binding similarly
-            // This would need to handle get and set functions
-            // For now, we'll skip this as it's not in the basic tests
-        }
-
-        Ok(())
-    }
-
-    fn link_remote_instance(
-        linker: &mut Linker<IsorunCtx>,
-        interface_name: &str,
-        transport: Arc<dyn Transport>,
-        remote_instance: &str,
-    ) -> Result<()> {
-        // For remote instances, we need to create RPC stubs that serialize calls
-
-        // For the math interface
-        if interface_name == "test:demo/math" {
-            let remote_id = remote_instance.to_string();
-            let iface = interface_name.to_string();
-            
-            linker.instance("test:demo/math")?.func_wrap_async(
-                "add",
-                move |_caller: wasmtime::StoreContextMut<'_, IsorunCtx>, (a, b): (u32, u32)| {
-                    let transport = transport.clone();
-                    let remote_id = remote_id.clone();
-                    let iface = iface.clone();
-                    
-                    Box::new(async move {
-                        // Encode arguments
-                        let args = encode_math_add_args(a, b)?;
-                        
-                        // Create RPC call
-                        let call = RpcCall::new(remote_id, iface, "add".to_string(), args);
-                        
-                        // Serialize and send
-                        let payload = call.to_bytes()?;
-                        let response_bytes = transport.call(&payload).await?;
-                        
-                        // Deserialize response
-                        let response = RpcResponse::from_bytes(&response_bytes)?;
-                        
-                        // Decode result
-                        let result = crate::rpc::decode_math_add_result(&response.result)?;
-                        
-                        Ok((result,))
-                    })
-                },
-            )?;
-        }
-
-        Ok(())
     }
 }

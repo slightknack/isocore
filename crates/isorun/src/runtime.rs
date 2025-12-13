@@ -1,22 +1,36 @@
-//! The main Runtime registry for apps, peers, and WIT definitions
+//! The main Runtime registry for apps, peers, and instances.
+//!
+//! The `Runtime` is the central coordinator for isorun. It maintains:
+//! - **Apps**: Registered WebAssembly components (templates)
+//! - **Peers**: Persistent Transport connections to other runtimes
+//! - **Instances**: Live running instances, addressable by target ID
+//!
+//! # Lifecycle
+//!
+//! 1. Create a Runtime
+//! 2. Register apps (`register_app`)
+//! 3. Add remote peers (`add_peer`)
+//! 4. Instantiate apps with `InstanceBuilder`
+//! 5. Register instances for incoming RPC (`register_instance`)
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+
 use tokio::sync::Mutex;
-use wasmtime::component::Component;
+
 use wasmtime::Engine;
+use wasmtime::component::Component;
 
 use crate::handles::AppId;
 use crate::handles::PeerId;
 use crate::instance::InstanceHandle;
-use crate::rpc::decode_math_add_args;
-use crate::rpc::encode_math_add_result;
-use crate::rpc::RpcCall;
-use crate::rpc::RpcResponse;
 use crate::traits::Transport;
 
+/// The central runtime registry.
+///
+/// This is cheap to clone - all clones share the same underlying registry.
 #[derive(Clone)]
 pub struct Runtime {
     pub(crate) inner: Arc<RuntimeInner>,
@@ -25,14 +39,17 @@ pub struct Runtime {
 pub(crate) struct RuntimeInner {
     pub(crate) engine: Engine,
     pub(crate) apps: Mutex<HashMap<AppId, Component>>,
-    // Persistent connections to other machines
     pub(crate) peers: Mutex<HashMap<PeerId, Arc<dyn Transport>>>,
-    // Registry of live instances by their remote identifiers
     pub(crate) instances: Mutex<HashMap<String, InstanceHandle>>,
     pub(crate) next_id: std::sync::atomic::AtomicU64,
 }
 
 impl Runtime {
+    /// Create a new runtime with default configuration.
+    ///
+    /// The runtime is configured for:
+    /// - Async support (required for isorun)
+    /// - Component model (required for WIT interfaces)
     pub fn new() -> Result<Self> {
         let mut config = wasmtime::Config::new();
         config.async_support(true);
@@ -48,7 +65,14 @@ impl Runtime {
         })
     }
 
-    /// Register a Wasm component (App).
+    /// Register a WebAssembly component as an app template.
+    ///
+    /// The same app can be instantiated multiple times with different configurations.
+    ///
+    /// # Arguments
+    ///
+    /// * `_name` - Human-readable name (currently unused, for future debugging)
+    /// * `bytes` - The compiled WebAssembly component bytes
     pub async fn register_app(&self, _name: &str, bytes: &[u8]) -> Result<AppId> {
         let component = Component::new(&self.inner.engine, bytes)?;
         let id = AppId(self.inner.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
@@ -56,63 +80,37 @@ impl Runtime {
         Ok(id)
     }
 
-    /// Add a persistent peer (Transport) to the runtime.
-    /// Returns a handle that can be used to link imports to this peer.
+    /// Add a persistent peer connection to the runtime.
+    ///
+    /// The Transport will be used to send RPCs to instances on that peer.
+    ///
+    /// # Returns
+    ///
+    /// A `PeerId` handle that can be used with `InstanceBuilder::link_remote`.
     pub async fn add_peer(&self, transport: impl Transport) -> Result<PeerId> {
         let id = PeerId(self.inner.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
         self.inner.peers.lock().await.insert(id, Arc::new(transport));
         Ok(id)
     }
 
-    /// Register a live instance with a remote identifier.
-    /// This allows the instance to receive incoming RPC calls.
-    pub async fn register_instance(&self, remote_id: String, handle: InstanceHandle) -> Result<()> {
-        self.inner.instances.lock().await.insert(remote_id, handle);
+    /// Register a live instance with a target identifier.
+    /// This allows the instance to receive incoming RPC calls addressed to this target.
+    pub async fn register_instance(&self, target_id: String, handle: InstanceHandle) -> Result<()> {
+        self.inner.instances.lock().await.insert(target_id, handle);
         Ok(())
     }
 
-    /// Unregister an instance by its remote identifier.
-    pub async fn unregister_instance(&self, remote_id: &str) -> Result<()> {
-        self.inner.instances.lock().await.remove(remote_id);
+    /// Unregister an instance by its target identifier.
+    pub async fn unregister_instance(&self, target_id: &str) -> Result<()> {
+        self.inner.instances.lock().await.remove(target_id);
         Ok(())
     }
 
-    /// Handle an incoming binary payload from a Transport.
-    ///
-    /// 1. Payload header contains Target RemoteID.
-    /// 2. Look up local instance associated with that RemoteID.
-    /// 3. Exec.
-    pub async fn handle_incoming_rpc(&self, payload: &[u8]) -> Result<Vec<u8>> {
-        // Deserialize the RPC call
-        let call = RpcCall::from_bytes(payload)?;
-        
-        // Look up the instance
+    /// Get an instance by its target identifier.
+    pub async fn get_instance(&self, target_id: &str) -> Result<InstanceHandle> {
         let instances = self.inner.instances.lock().await;
-        let instance = instances.get(&call.remote_instance)
-            .ok_or_else(|| anyhow::anyhow!("Instance not found: {}", call.remote_instance))?
-            .clone();
-        drop(instances);
-        
-        // Execute the function based on interface and function name
-        // For now, we only handle the math/add function
-        if call.interface == "test:demo/math" && call.function == "add" {
-            // Decode arguments
-            let (a, b) = decode_math_add_args(&call.args)?;
-            
-            // Call the function
-            let mut lock = instance.store.lock().await;
-            let math = instance.instance.get_typed_func::<(u32, u32), (u32,)>(&mut *lock, "test:demo#math")?;
-            let (result,) = math.call_async(&mut *lock, (a, b)).await?;
-            drop(lock);
-            
-            // Encode the result
-            let result_bytes = encode_math_add_result(result)?;
-            
-            // Create and serialize the response
-            let response = RpcResponse::new(result_bytes);
-            response.to_bytes()
-        } else {
-            anyhow::bail!("Unsupported function: {}::{}", call.interface, call.function)
-        }
+        instances.get(target_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Instance not found: {}", target_id))
     }
 }

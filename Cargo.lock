@@ -914,6 +914,8 @@ dependencies = [
  "anyhow",
  "anymap",
  "async-trait",
+ "neopack",
+ "neorpc",
  "tokio",
  "wasmtime",
  "wasmtime-wasi",
