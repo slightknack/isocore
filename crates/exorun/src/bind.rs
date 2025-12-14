@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 
+use neopack::Encoder;
 use neorpc::CallEncoder;
 use wasmtime::component::Linker;
 use wasmtime::component::LinkerInstance;
@@ -88,6 +89,10 @@ impl Binder {
     }
 }
 
+// TODO: we pass result types here but maybe we can
+//       prepare special data for the decoder that
+//       has instructions for how to decode specific types
+//       and we calculate this once instead of tree-walking
 /// Generates the async closure for a specific method within an instance.
 fn bind_method(
     linker_instance: &mut LinkerInstance<ExorunCtx>,
@@ -98,24 +103,25 @@ fn bind_method(
 ) -> Result<()> {
     let method_name_clone = method_name.to_string();
 
-    linker_instance.func_new_async(&method_name, move |store, _func_ty, args, results| {
+    linker_instance.func_new_async(method_name, move |store, _func_ty, args, results| {
+        // sadly we must clone
         let seq = store.data().next_seq();
-        let target_id = target_id.clone();
-        let method_name = method_name_clone.clone();
         let client = client.clone();
         let result_types = result_types.clone();
 
-        // args is a slice borrowed from the caller. We must clone it to an owned Vec
-        // so it can be moved into the static future.
-        // TODO: maybe encode the args before we put them in call encoder?
-        let args_owned = args.to_vec();
+        // prepare the payload with love
+        let call = CallEncoder::new(seq, &target_id, &method_name_clone, args);
+        let payload = encode_payload(call);
 
+        // I like your funny words, magic man
         Box::new(async move {
-            let encoder = CallEncoder::new(seq, &target_id, &method_name, &args_owned);
-            let return_vals = client.call(encoder, &result_types)
+            // drop the bomb, so to speak
+            let payload = payload?;
+            let return_vals = client.call(&payload, &result_types)
                 .await
                 .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
 
+            // trust but verify
             if return_vals.len() != results.len() {
                 return Err(wasmtime::Error::msg(format!(
                     "Result count mismatch: expected {}, got {}",
@@ -124,7 +130,7 @@ fn bind_method(
                 )));
             }
 
-            // Copy results into the output buffer.
+            // TODO: instead of copying, decode directly?
             for (i, val) in return_vals.into_iter().enumerate() {
                 results[i] = val;
             }
@@ -134,6 +140,12 @@ fn bind_method(
     }).map_err(Error::Wasmtime)?;
 
     Ok(())
+}
+
+fn encode_payload(call: CallEncoder) -> std::result::Result<Vec<u8>, wasmtime::Error> {
+    let mut enc = Encoder::new();
+    call.encode(&mut enc).map_err(|e| wasmtime::Error::msg(e.to_string()))?;
+    enc.into_bytes().map_err(|e| wasmtime::Error::msg(e.to_string()))
 }
 
 #[cfg(test)]

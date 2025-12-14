@@ -137,10 +137,12 @@ async fn test_successful_ping_pong() {
     let args = vec![Val::String("ping".into())];
     let expected_types = vec![Type::String];
 
-    let encoder = CallEncoder::new(1, "target", "method", &args);
+    let mut enc = Encoder::new();
+    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
+    let payload = enc.as_bytes().unwrap();
 
     // We expect 1 return value: "pong"
-    let results = client.call(encoder, &expected_types)
+    let results = client.call(payload, &expected_types)
         .await
         .expect("Call failed");
 
@@ -159,9 +161,11 @@ async fn test_transport_error() {
     let args = vec![Val::U32(42)];
     let expected_types = vec![Type::U32];
 
-    let encoder = CallEncoder::new(1, "target", "method", &args);
+    let mut enc = Encoder::new();
+    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
+    let payload = enc.as_bytes().unwrap();
 
-    let err = client.call(encoder, &expected_types).await.unwrap_err();
+    let err = client.call(payload, &expected_types).await.unwrap_err();
 
     match err {
         ClientError::Transport(TransportError::Timeout) => {},
@@ -177,9 +181,12 @@ async fn test_rpc_protocol_violation_call_frame() {
     let args = vec![Val::U32(42)];
     let expected_types = vec![Type::U32];
 
-    let encoder = CallEncoder::new(1, "target", "method", &args);
 
-    let err = client.call(encoder, &expected_types).await.unwrap_err();
+    let mut enc = Encoder::new();
+    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
+    let payload = enc.as_bytes().unwrap();
+
+    let err = client.call(payload, &expected_types).await.unwrap_err();
 
     match err {
         ClientError::NeoRpc(e) => {
@@ -197,9 +204,11 @@ async fn test_rpc_malformed_frame() {
     let args = vec![Val::U32(42)];
     let expected_types = vec![Type::U32];
 
-    let encoder = CallEncoder::new(1, "target", "method", &args);
+    let mut enc = Encoder::new();
+    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
+    let payload = enc.as_bytes().unwrap();
 
-    let err = client.call(encoder, &expected_types).await.unwrap_err();
+    let err = client.call(payload, &expected_types).await.unwrap_err();
 
     match err {
         // Depending on whether neopack or neorpc catches it first
@@ -216,9 +225,11 @@ async fn test_remote_failure() {
     let args = vec![Val::U32(42)];
     let expected_types = vec![Type::U32];
 
-    let encoder = CallEncoder::new(1, "target", "method", &args);
+    let mut enc = Encoder::new();
+    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
+    let payload = enc.as_bytes().unwrap();
 
-    let err = client.call(encoder, &expected_types).await.unwrap_err();
+    let err = client.call(payload, &expected_types).await.unwrap_err();
 
     match err {
         ClientError::Remote(FailureReason::AppTrapped) => {},

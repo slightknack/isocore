@@ -1,7 +1,0 @@
-[package]
-name = "isocore"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-# no deps for the time being.

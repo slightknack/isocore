@@ -6,8 +6,6 @@
 use std::sync::Arc;
 
 use neopack::Decoder;
-use neopack::Encoder;
-use neorpc::CallEncoder;
 use neorpc::FailureReason;
 use neorpc::RpcFrame;
 use neorpc::decode_vals;
@@ -78,14 +76,9 @@ impl Client {
     /// * `results` - The expected return types, required for decoding the response.
     pub async fn call(
         &self,
-        call: CallEncoder<'_>,
+        payload: &[u8],
         result_types: &[Type],
     ) -> Result<Vec<Val>> {
-        // prepare the message
-        let mut enc = Encoder::new();
-        call.encode(&mut enc)?;
-        let payload = enc.into_bytes()?;
-
         // longingly await a response
         let response = self.transport.call(&payload).await?;
         let mut dec = Decoder::new(&response);
