@@ -13,16 +13,37 @@
 
 use std::sync::Arc;
 
+use neopack::Decoder;
 use neopack::Encoder;
 use neorpc::CallEncoder;
+use neorpc::RpcFrame;
+use neorpc::decode_vals;
 use wasmtime::component::Linker;
+use wasmtime::component::LinkerInstance;
 
 use crate::context::ExorunCtx;
 use crate::ledger::FunctionSignature;
 use crate::ledger::Ledger;
-use crate::proxy::Proxy;
-use crate::proxy::ProxyError;
 use crate::transport::Transport;
+
+#[derive(Debug)]
+pub enum Error {
+    /// The interface requested for linking was not found in the Ledger.
+    InterfaceNotFound(String),
+    /// Wasmtime linker error (e.g., duplicate definition, shadow disabled).
+    Wasmtime(wasmtime::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InterfaceNotFound(name) => write!(f, "Interface '{}' not found in Ledger", name),
+            Self::Wasmtime(e) => write!(f, "Wasmtime linker error: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
 
 /// A handle to the resources needed to bind a remote target.
 #[derive(Clone)]
@@ -63,64 +84,11 @@ impl Binder {
 
         Ok(())
     }
-
-    /// Links a root-level function (e.g., `log`) to a remote target.
-    pub fn link_remote_root(
-        linker: &mut Linker<ExorunCtx>,
-        ledger: &Ledger,
-        func_name: &str,
-        target: RemoteTarget,
-    ) -> Result<(), Error> {
-        let signature = ledger.root_funcs.get(func_name)
-            .ok_or_else(|| Error::FunctionNotFound(func_name.to_string()))?;
-
-        let _root = linker.root();
-        // Wasmtime's root linker instance is a bit special, usually accessed via root()
-        // Here we can just use the implementation logic of bind_method but adapted
-        // for the root scope. However, `LinkerInstance` is not easily generic over root vs nested.
-        // We replicate the logic for the root.
-
-        let transport = target.transport.clone();
-        let target_id = target.target_id.clone();
-        let method = func_name.to_string();
-        let sig = signature.clone();
-
-        linker.root().func_new_async(func_name, move |store, _func_ty, args, results| {
-            let seq = store.data().next_seq();
-            let mut enc = Encoder::new();
-            CallEncoder::new(seq, &target_id, &method, args).encode(&mut enc).unwrap();
-            let payload = enc.into_bytes().unwrap();
-
-            let transport = transport.clone();
-            let sig = sig.clone();
-
-            Box::new(async move {
-                let reply_vals = Proxy::invoke(&payload, &transport, &sig).await
-                    .map_err(map_proxy_error)?;
-
-                if reply_vals.len() != results.len() {
-                    return Err(wasmtime::Error::msg(format!(
-                        "Ledger mismatch: expected {} results, got {}",
-                        results.len(),
-                        reply_vals.len()
-                    )));
-                }
-
-                for (i, val) in reply_vals.into_iter().enumerate() {
-                    results[i] = val;
-                }
-
-                Ok(())
-            })
-        }).map_err(Error::Wasmtime)?;
-
-        Ok(())
-    }
 }
 
 /// Helper to generate the closure for a specific method within an instance.
 fn bind_method(
-    instance_linker: &mut wasmtime::component::LinkerInstance<ExorunCtx>,
+    instance_linker: &mut LinkerInstance<ExorunCtx>,
     method_name: &str,
     target: RemoteTarget,
     signature: FunctionSignature,
@@ -139,8 +107,29 @@ fn bind_method(
         let sig = signature.clone();
 
         Box::new(async move {
-            let reply_vals = Proxy::invoke(&payload, &transport, &sig).await
-                .map_err(map_proxy_error)?;
+            let response_bytes = transport.call(&payload).await
+                .map_err(|e| wasmtime::Error::msg(format!("Transport error: {}", e)))?;
+
+            let mut dec = Decoder::new(&response_bytes);
+            let frame = RpcFrame::decode(&mut dec)
+                .map_err(|e| wasmtime::Error::msg(format!("RPC decode error: {}", e)))?;
+
+            let reply_vals = match frame {
+                RpcFrame::Call(_) => {
+                    return Err(wasmtime::Error::msg("Protocol violation: received Call frame"));
+                }
+                RpcFrame::Reply(reply) => {
+                    match reply.status {
+                        Ok(val_decoder) => {
+                            decode_vals(val_decoder, &sig.results)
+                                .map_err(|e| wasmtime::Error::msg(format!("Result decode error: {}", e)))?
+                        }
+                        Err(reason) => {
+                            return Err(wasmtime::Error::msg(format!("Remote failure: {:?}", reason)));
+                        }
+                    }
+                }
+            };
 
             if reply_vals.len() != results.len() {
                 return Err(wasmtime::Error::msg(format!(
@@ -161,55 +150,6 @@ fn bind_method(
     Ok(())
 }
 
-/// Maps domain-specific Proxy errors to Wasmtime errors for traps.
-fn map_proxy_error(e: ProxyError) -> wasmtime::Error {
-    // In a production system, we might want to attach more structured data here
-    // or map specific remote failures (like AppTrapped) to specific Wasm traps.
-    // For now, we propagate the error description.
-    wasmtime::Error::msg(format!("Remote Call Failed: {}", e))
-}
-
-// --- Error Definitions ---
-
-#[derive(Debug)]
-pub enum Error {
-    /// The interface requested for linking was not found in the Ledger.
-    InterfaceNotFound(String),
-    /// The root function requested for linking was not found in the Ledger.
-    FunctionNotFound(String),
-    /// Wasmtime linker error (e.g., duplicate definition, shadow disabled).
-    Wasmtime(wasmtime::Error),
-    /// Result count mismatch between signature and proxy response.
-    ResultCountMismatch { expected: usize, got: usize },
-    /// Proxy invocation failed.
-    Proxy(ProxyError),
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InterfaceNotFound(name) => write!(f, "Interface '{}' not found in Ledger", name),
-            Self::FunctionNotFound(name) => write!(f, "Function '{}' not found in Ledger", name),
-            Self::Wasmtime(e) => write!(f, "Wasmtime linker error: {}", e),
-            Self::ResultCountMismatch { expected, got } => {
-                write!(f, "Result count mismatch: expected {}, got {}", expected, got)
-            }
-            Self::Proxy(e) => write!(f, "Proxy error: {}", e),
-        }
-    }
-}
-
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Proxy(e) => Some(e),
-            _ => None,
-        }
-    }
-}
-
-// --- Tests ---
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,8 +161,6 @@ mod tests {
     use wasmtime::component::Component;
     use wasmtime::Engine;
     use wasmtime::Store;
-
-    // --- Mocks ---
 
     struct MockTransport {
         // Simplified: echo back success with empty results for any call

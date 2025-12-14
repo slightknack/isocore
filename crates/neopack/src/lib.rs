@@ -19,6 +19,52 @@
 #[cfg(test)]
 mod tests;
 
+/// Neopack serialization and deserialization errors.
+#[derive(Debug, Clone)]
+pub enum Error {
+    /// Internal buffer capacity exceeded.
+    BufferFull,
+    /// Byte does not correspond to a valid Neopack `Tag`.
+    InvalidTag(u8),
+    /// String data is not valid UTF-8.
+    InvalidUtf8,
+    /// Closing a scope that does not match the active scope stack.
+    ScopeMismatch { expected: Scope, actual: Scope },
+    /// Attempted to close a scope when only the Root remains.
+    ScopeUnderflow,
+    /// Attempted to finalize the buffer with open scopes.
+    ScopeStillOpen,
+    /// Buffer exhausted while reading.
+    UnexpectedEnd,
+    /// Blob or container length exceeds `u32::MAX`.
+    BlobTooLarge(usize),
+    /// Structural Violation: Attempted to write >1 item into a strict scope (Option/Result/Variant).
+    TooManyItems(Scope),
+    /// Structural Violation: Attempted to close a strict scope (Option/Result/Variant) without a value.
+    EmptyAdt(Scope),
+    /// Structural Violation: Attempted to write a non-Variant directly into a Map.
+    InvalidMapEntry,
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::InvalidTag(b) => write!(f, "Invalid Tag byte: {:#04x}", b),
+            Error::ScopeMismatch { expected, actual } => {
+                write!(f, "Scope Mismatch: expected {:?}, found {:?}", expected, actual)
+            }
+            Error::TooManyItems(s) => write!(f, "Too many items in scope {:?}; expected exactly 1", s),
+            Error::EmptyAdt(s) => write!(f, "Empty ADT scope {:?}; expected exactly 1 item", s),
+            _ => write!(f, "{:?}", self),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+/// Specialized `Result` for Neopack operations.
+pub type Result<T> = std::result::Result<T, Error>;
+
 /// Identifies the type of the encoded value.
 ///
 /// Used for schema evolution and safe skipping of unknown fields.
@@ -112,51 +158,7 @@ pub enum Scope {
     Variant,
 }
 
-/// Neopack serialization and deserialization errors.
-#[derive(Debug, Clone)]
-pub enum Error {
-    /// Internal buffer capacity exceeded.
-    BufferFull,
-    /// Byte does not correspond to a valid Neopack `Tag`.
-    InvalidTag(u8),
-    /// String data is not valid UTF-8.
-    InvalidUtf8,
-    /// Closing a scope that does not match the active scope stack.
-    ScopeMismatch { expected: Scope, actual: Scope },
-    /// Attempted to close a scope when only the Root remains.
-    ScopeUnderflow,
-    /// Attempted to finalize the buffer with open scopes.
-    ScopeStillOpen,
-    /// Buffer exhausted while reading.
-    UnexpectedEnd,
-    /// Blob or container length exceeds `u32::MAX`.
-    BlobTooLarge(usize),
-    /// Structural Violation: Attempted to write >1 item into a strict scope (Option/Result/Variant).
-    TooManyItems(Scope),
-    /// Structural Violation: Attempted to close a strict scope (Option/Result/Variant) without a value.
-    EmptyAdt(Scope),
-    /// Structural Violation: Attempted to write a non-Variant directly into a Map.
-    InvalidMapEntry,
-}
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Error::InvalidTag(b) => write!(f, "Invalid Tag byte: {:#04x}", b),
-            Error::ScopeMismatch { expected, actual } => {
-                write!(f, "Scope Mismatch: expected {:?}, found {:?}", expected, actual)
-            }
-            Error::TooManyItems(s) => write!(f, "Too many items in scope {:?}; expected exactly 1", s),
-            Error::EmptyAdt(s) => write!(f, "Empty ADT scope {:?}; expected exactly 1 item", s),
-            _ => write!(f, "{:?}", self),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
-
-/// Specialized `Result` for Neopack operations.
-pub type Result<T> = std::result::Result<T, Error>;
 
 /// An active container scope on the `Encoder` stack.
 struct Frame {
@@ -310,8 +312,6 @@ impl Encoder {
         Ok(())
     }
 
-    // --- Scalars ---
-
     /// Encodes a boolean value.
     pub fn bool(&mut self, v: bool) -> Result<()> {
         self.write_tag(if v { Tag::BoolTrue } else { Tag::BoolFalse })?;
@@ -352,8 +352,6 @@ impl Encoder {
     /// Encodes `Option::None`.
     pub fn option_none(&mut self) -> Result<()> { self.write_tag(Tag::OptionNone)?; self.on_item_written(); Ok(()) }
 
-    // --- Blobs ---
-
     /// Encodes a UTF-8 string blob.
     pub fn str(&mut self, v: &str) -> Result<()> {
         let len = v.len();
@@ -375,8 +373,6 @@ impl Encoder {
         self.on_item_written();
         Ok(())
     }
-
-    // --- Containers ---
 
     /// Begins a List container.
     ///
