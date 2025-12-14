@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 
+use neopack::Encoder;
 use neorpc::CallEncoder;
 use wasmtime::component::Linker;
 
@@ -85,26 +86,18 @@ impl Binder {
         let sig = signature.clone();
 
         linker.root().func_new_async(func_name, move |store, _func_ty, args, results| {
+            let seq = store.data().next_seq();
+            let mut enc = Encoder::new();
+            CallEncoder::new(seq, &target_id, &method, args).encode(&mut enc).unwrap();
+            let payload = enc.into_bytes().unwrap();
+
             let transport = transport.clone();
-            let target_id = target_id.clone();
-            let method = method.clone();
             let sig = sig.clone();
-            // We must clone args because they are borrowed from the caller but our future must own data
-            // However, Val is Clone.
-            let args_vec = args.to_vec();
 
             Box::new(async move {
-                // 1. Airlock Entry
-                let seq = store.data().next_seq();
+                let reply_vals = Proxy::invoke(&payload, &transport, &sig).await
+                    .map_err(map_proxy_error)?;
 
-                // 2. Encode
-                let call = CallEncoder::new(seq, &target_id, &method, &args_vec);
-
-                // 3. Invoke Proxy (Transport + Decode)
-                let reply_vals = Proxy::invoke(call, &transport, &sig).await
-                    .map_err(|e| map_proxy_error(e))?;
-
-                // 4. Return results
                 if reply_vals.len() != results.len() {
                     return Err(wasmtime::Error::msg(format!(
                         "Ledger mismatch: expected {} results, got {}",
@@ -137,39 +130,21 @@ fn bind_method(
     let method = method_name.to_string();
 
     instance_linker.func_new_async(method_name, move |store, _func_ty, args, results| {
-        // --- The Closure Context ---
+        let seq = store.data().next_seq();
+        let mut enc = Encoder::new();
+        CallEncoder::new(seq, &target_id, &method, args).encode(&mut enc).unwrap();
+        let payload = enc.into_bytes().unwrap();
+
         let transport = transport.clone();
-        let target_id = target_id.clone();
-        let method = method.clone();
         let sig = signature.clone();
 
-        // Wasmtime passes args as a slice. We must own them to move into the async block.
-        // Val is cheap-ish to clone (allocations only for strings/lists).
-        let args_vec = args.to_vec();
-
         Box::new(async move {
-            // --- The Async Boundary ---
-
-            // 1. Sequence Generation
-            let seq = store.data().next_seq();
-
-            // 2. Protocol Encoding
-            let call = CallEncoder::new(seq, &target_id, &method, &args_vec);
-
-            // 3. Remote Invocation via Proxy
-            // This handles serialization, transport, and deserialization.
-            // If this fails, we map it to an anyhow::Error, which causes a Guest Trap.
-            let reply_vals = Proxy::invoke(call, &transport, &sig).await
+            let reply_vals = Proxy::invoke(&payload, &transport, &sig).await
                 .map_err(map_proxy_error)?;
 
-            // 4. Write Back Results
-            // The Ledger guarantees sig.results matches the component's expectation,
-            // and Proxy guarantees reply_vals matches sig.results.
-            // We double check for sanity.
             if reply_vals.len() != results.len() {
-                // This implies the Ledger or Proxy violated invariants.
                 return Err(wasmtime::Error::msg(format!(
-                    "Critical Safety Violation: Return count mismatch. Expected {}, got {}.",
+                    "Result count mismatch: expected {}, got {}",
                     results.len(),
                     reply_vals.len()
                 )));

@@ -4,23 +4,25 @@
 //! correctness and type safety.
 //!
 //! The proxy is stateless, it operates as a pure function from
-//! `(CallEncoder, Transport, FunctionSignature)` to typed results.
-//! Sequence generation and transport lifecycle are external concerns.
+//! `(payload, Transport, FunctionSignature)` to typed results.
+//! Encoding and transport lifecycle are external concerns.
 //!
 //! ## Invariants
 //!
 //! - Results match the signature or an error is returned
-//! - Reply sequence numbers must match call sequence numbers
 //! - Only Reply frames are accepted; Call frames are protocol violations
 
 use std::sync::Arc;
 use std::fmt;
 
+use neopack::Decoder;
+use neorpc::FailureReason;
+use neorpc::RpcFrame;
 use wasmtime::component::Val;
-use neopack::{Encoder, Decoder};
-use neorpc::{RpcFrame, CallEncoder, FailureReason};
-use crate::transport::{Transport, TransportError};
+
 use crate::ledger::FunctionSignature;
+use crate::transport::Transport;
+use crate::transport::TransportError;
 
 /// Errors during remote invocation.
 #[derive(Debug, Clone)]
@@ -70,42 +72,28 @@ pub struct Proxy;
 impl Proxy {
     /// Execute a typed remote call.
     ///
-    /// Marshals the call, sends it via transport, validates the reply correlation,
+    /// Takes pre-encoded call payload, sends it via transport, validates the reply,
     /// and demarshals results according to the signature.
     ///
     /// Returns `Transport` error on network failure, `Rpc` error on protocol
-    /// violation, `Remote` error if the remote instance fails, or `Internal`
-    /// error on sequence mismatch.
+    /// violation, or `Remote` error if the remote instance fails.
     pub async fn invoke(
-        call: CallEncoder<'_>,
+        payload: &[u8],
         transport: &Arc<dyn Transport>,
         sig: &FunctionSignature,
     ) -> Result<Vec<Val>, ProxyError> {
-        // Marshal and send
-        let mut enc = Encoder::new();
-        call.encode(&mut enc)?;
-        let payload = enc.into_bytes().map_err(neorpc::RpcError::from)?;
-        let response_bytes = transport.call(&payload).await?;
+        let response_bytes = transport.call(payload).await?;
 
-        // Decode and validate frame type
         let mut dec = Decoder::new(&response_bytes);
         let frame = RpcFrame::decode(&mut dec)?;
 
         match frame {
-            // Protocol violation: we're a client expecting replies
             RpcFrame::Call(_) => {
                 Err(ProxyError::Rpc(neorpc::RpcError::ProtocolViolation(
                     "Received Call frame while waiting for Reply".into()
                 )))
             }
-            // Validate correlation and demarshal results
             RpcFrame::Reply(reply) => {
-                if reply.seq != call.seq {
-                    return Err(ProxyError::Internal(format!(
-                        "Sequence mismatch: sent {}, received {}", call.seq, reply.seq
-                    )));
-                }
-
                 match reply.status {
                     Ok(val_decoder) => {
                         let results = neorpc::decode_vals(val_decoder, &sig.results)?;

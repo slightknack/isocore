@@ -90,19 +90,6 @@ impl Transport for CallReturningTransport {
     }
 }
 
-/// Mock transport that returns a reply with wrong sequence number.
-/// Note: Hardcoded `seq = 999`; tests must use a different sequence number.
-struct WrongSeqTransport;
-
-#[async_trait::async_trait]
-impl Transport for WrongSeqTransport {
-    async fn call(&self, _payload: &[u8]) -> transport::Result<Vec<u8>> {
-        let mut enc = Encoder::new();
-        ReplyOkEncoder::new(999, &[]).encode(&mut enc).unwrap();
-        Ok(enc.into_bytes().unwrap())
-    }
-}
-
 /// Mock transport that returns a failure reply.
 struct FailureTransport;
 
@@ -151,14 +138,15 @@ fn make_signature(params: Vec<Type>, results: Vec<Type>) -> FunctionSignature {
 async fn test_successful_ping_pong() {
     let transport = Arc::new(PingPongTransport) as Arc<dyn Transport>;
 
-    // Create a signature expecting string -> string
     let string_ty = Type::String;
     let sig = make_signature(vec![string_ty.clone()], vec![string_ty]);
 
     let args = vec![Val::String("ping".into())];
-    let call = CallEncoder::new(1, "target", "method", &args);
+    let mut enc = Encoder::new();
+    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
+    let payload = enc.into_bytes().unwrap();
 
-    let results = Proxy::invoke(call, &transport, &sig).await.unwrap();
+    let results = Proxy::invoke(&payload, &transport, &sig).await.unwrap();
 
     assert_eq!(results.len(), 1);
     match &results[0] {
@@ -175,9 +163,11 @@ async fn test_transport_error() {
     let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
 
     let args = vec![Val::U32(42)];
-    let call = CallEncoder::new(1, "target", "method", &args);
+    let mut enc = Encoder::new();
+    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
+    let payload = enc.into_bytes().unwrap();
 
-    let err = Proxy::invoke(call, &transport, &sig).await.unwrap_err();
+    let err = Proxy::invoke(&payload, &transport, &sig).await.unwrap_err();
 
     match err {
         ProxyError::Transport(TransportError::Timeout) => {},
@@ -193,9 +183,11 @@ async fn test_rpc_protocol_violation_call_frame() {
     let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
 
     let args = vec![Val::U32(42)];
-    let call = CallEncoder::new(1, "target", "method", &args);
+    let mut enc = Encoder::new();
+    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
+    let payload = enc.into_bytes().unwrap();
 
-    let err = Proxy::invoke(call, &transport, &sig).await.unwrap_err();
+    let err = Proxy::invoke(&payload, &transport, &sig).await.unwrap_err();
 
     match err {
         ProxyError::Rpc(e) => {
@@ -213,9 +205,11 @@ async fn test_rpc_malformed_frame() {
     let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
 
     let args = vec![Val::U32(42)];
-    let call = CallEncoder::new(1, "target", "method", &args);
+    let mut enc = Encoder::new();
+    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
+    let payload = enc.into_bytes().unwrap();
 
-    let err = Proxy::invoke(call, &transport, &sig).await.unwrap_err();
+    let err = Proxy::invoke(&payload, &transport, &sig).await.unwrap_err();
 
     match err {
         ProxyError::Rpc(_) => {},
@@ -231,9 +225,11 @@ async fn test_remote_failure() {
     let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
 
     let args = vec![Val::U32(42)];
-    let call = CallEncoder::new(1, "target", "method", &args);
+    let mut enc = Encoder::new();
+    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
+    let payload = enc.into_bytes().unwrap();
 
-    let err = Proxy::invoke(call, &transport, &sig).await.unwrap_err();
+    let err = Proxy::invoke(&payload, &transport, &sig).await.unwrap_err();
 
     match err {
         ProxyError::Remote(FailureReason::AppTrapped) => {},
@@ -241,22 +237,4 @@ async fn test_remote_failure() {
     }
 }
 
-#[tokio::test]
-async fn test_internal_sequence_mismatch() {
-    let transport = Arc::new(WrongSeqTransport) as Arc<dyn Transport>;
 
-    let u32_ty = Type::U32;
-    let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
-
-    let args = vec![Val::U32(42)];
-    let call = CallEncoder::new(1, "target", "method", &args);
-
-    let err = Proxy::invoke(call, &transport, &sig).await.unwrap_err();
-
-    match err {
-        ProxyError::Internal(msg) => {
-            assert!(msg.contains("Sequence mismatch"));
-        },
-        _ => panic!("Expected Internal error, got {:?}", err),
-    }
-}
