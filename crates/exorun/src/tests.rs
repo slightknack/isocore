@@ -10,8 +10,8 @@ use neorpc::CallEncoder;
 use neorpc::FailureReason;
 use neorpc::ReplyOkEncoder;
 use neorpc::ReplyErrEncoder;
-use wasmtime::component::Val;
 use wasmtime::component::Type;
+use wasmtime::component::Val;
 
 use crate::proxy::Proxy;
 use crate::proxy::ProxyError;
@@ -108,7 +108,7 @@ struct FailureTransport;
 
 #[async_trait::async_trait]
 impl Transport for FailureTransport {
-    async fn call(&self, payload: &[u8]) -> crate::transport::Result<Vec<u8>> {
+    async fn call(&self, payload: &[u8]) -> transport::Result<Vec<u8>> {
         // Decode to get seq
         let mut dec = Decoder::new(payload);
         let frame = RpcFrame::decode(&mut dec).unwrap();
@@ -128,7 +128,7 @@ struct TimeoutTransport;
 
 #[async_trait::async_trait]
 impl Transport for TimeoutTransport {
-    async fn call(&self, _payload: &[u8]) -> crate::transport::Result<Vec<u8>> {
+    async fn call(&self, _payload: &[u8]) -> transport::Result<Vec<u8>> {
         Err(TransportError::Timeout)
     }
 }
@@ -138,12 +138,12 @@ struct MalformedTransport;
 
 #[async_trait::async_trait]
 impl Transport for MalformedTransport {
-    async fn call(&self, _payload: &[u8]) -> crate::transport::Result<Vec<u8>> {
+    async fn call(&self, _payload: &[u8]) -> transport::Result<Vec<u8>> {
         Ok(vec![0xFF, 0xFF, 0xFF])
     }
 }
 
-fn make_signature(params: Vec<wasmtime::component::Type>, results: Vec<wasmtime::component::Type>) -> FunctionSignature {
+fn make_signature(params: Vec<Type>, results: Vec<Type>) -> FunctionSignature {
     FunctionSignature { params, results }
 }
 
@@ -152,7 +152,7 @@ async fn test_successful_ping_pong() {
     let transport = Arc::new(PingPongTransport) as Arc<dyn Transport>;
 
     // Create a signature expecting string -> string
-    let string_ty = wasmtime::component::Type::String;
+    let string_ty = Type::String;
     let sig = make_signature(vec![string_ty.clone()], vec![string_ty]);
 
     let args = vec![Val::String("ping".into())];
@@ -171,7 +171,7 @@ async fn test_successful_ping_pong() {
 async fn test_transport_error() {
     let transport = Arc::new(TimeoutTransport) as Arc<dyn Transport>;
 
-    let u32_ty = wasmtime::component::Type::U32;
+    let u32_ty = Type::U32;
     let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
 
     let args = vec![Val::U32(42)];
@@ -189,7 +189,7 @@ async fn test_transport_error() {
 async fn test_rpc_protocol_violation_call_frame() {
     let transport = Arc::new(CallReturningTransport) as Arc<dyn Transport>;
 
-    let u32_ty = wasmtime::component::Type::U32;
+    let u32_ty = Type::U32;
     let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
 
     let args = vec![Val::U32(42)];
@@ -209,7 +209,7 @@ async fn test_rpc_protocol_violation_call_frame() {
 async fn test_rpc_malformed_frame() {
     let transport = Arc::new(MalformedTransport) as Arc<dyn Transport>;
 
-    let u32_ty = wasmtime::component::Type::U32;
+    let u32_ty = Type::U32;
     let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
 
     let args = vec![Val::U32(42)];
@@ -227,7 +227,7 @@ async fn test_rpc_malformed_frame() {
 async fn test_remote_failure() {
     let transport = Arc::new(FailureTransport) as Arc<dyn Transport>;
 
-    let u32_ty = wasmtime::component::Type::U32;
+    let u32_ty = Type::U32;
     let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
 
     let args = vec![Val::U32(42)];
@@ -245,7 +245,7 @@ async fn test_remote_failure() {
 async fn test_internal_sequence_mismatch() {
     let transport = Arc::new(WrongSeqTransport) as Arc<dyn Transport>;
 
-    let u32_ty = wasmtime::component::Type::U32;
+    let u32_ty = Type::U32;
     let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
 
     let args = vec![Val::U32(42)];
