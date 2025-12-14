@@ -9,7 +9,7 @@
 use crate::codec::encode_val;
 use crate::error::FailureReason;
 use crate::error::Result;
-use crate::error::RpcError;
+use crate::error::Error;
 
 use neopack::Decoder;
 use neopack::Encoder;
@@ -28,7 +28,7 @@ impl<'a> CallEncoder<'a> {
     pub fn new(seq: u64, target: &'a str, method: &'a str, args: &'a [Val]) -> Self {
         Self { seq, target, method, args }
     }
-    
+
     /// Encode this call into the encoder.
     pub fn encode(&self, enc: &mut Encoder) -> Result<()> {
         enc.variant_begin("Call")?;
@@ -83,10 +83,10 @@ impl<'a> CallDecoder<'a> {
         }
 
         Ok(CallDecoder {
-            seq: seq.ok_or(RpcError::ProtocolViolation("Missing seq".into()))?,
-            target: target.ok_or(RpcError::ProtocolViolation("Missing target".into()))?,
-            method: method.ok_or(RpcError::ProtocolViolation("Missing method".into()))?,
-            args: args_dec.ok_or(RpcError::ProtocolViolation("Missing args".into()))?,
+            seq: seq.ok_or(Error::ProtocolViolation("Missing seq".into()))?,
+            target: target.ok_or(Error::ProtocolViolation("Missing target".into()))?,
+            method: method.ok_or(Error::ProtocolViolation("Missing method".into()))?,
+            args: args_dec.ok_or(Error::ProtocolViolation("Missing args".into()))?,
         })
     }
 }
@@ -101,7 +101,7 @@ impl<'a> ReplyOkEncoder<'a> {
     pub fn new(seq: u64, results: &'a [Val]) -> Self {
         Self { seq, results }
     }
-    
+
     /// Encode this success reply into the encoder.
     pub fn encode(&self, enc: &mut Encoder) -> Result<()> {
         enc.variant_begin("Reply")?;
@@ -135,7 +135,7 @@ impl ReplyErrEncoder {
     pub fn new(seq: u64, reason: FailureReason) -> Self {
         Self { seq, reason }
     }
-    
+
     /// Encode this failure reply into the encoder.
     pub fn encode(&self, enc: &mut Encoder) -> Result<()> {
         enc.variant_begin("Reply")?;
@@ -173,7 +173,7 @@ impl<'a> ReplyDecoder<'a> {
             Err(err_body) => Self::decode_failure(err_body),
         }
     }
-    
+
     fn decode_success(mut ok_body: Decoder<'a>) -> Result<Self> {
         let mut map = ok_body.map()?;
         let mut seq = None;
@@ -188,11 +188,11 @@ impl<'a> ReplyDecoder<'a> {
         }
 
         Ok(ReplyDecoder {
-            seq: seq.ok_or(RpcError::ProtocolViolation("Missing seq".into()))?,
-            status: Ok(results_dec.ok_or(RpcError::ProtocolViolation("Missing results".into()))?),
+            seq: seq.ok_or(Error::ProtocolViolation("Missing seq".into()))?,
+            status: Ok(results_dec.ok_or(Error::ProtocolViolation("Missing results".into()))?),
         })
     }
-    
+
     fn decode_failure(mut err_body: Decoder<'a>) -> Result<Self> {
         let mut map = err_body.map()?;
         let mut seq = None;
@@ -210,8 +210,8 @@ impl<'a> ReplyDecoder<'a> {
         }
 
         Ok(ReplyDecoder {
-            seq: seq.ok_or(RpcError::ProtocolViolation("Missing seq".into()))?,
-            status: Err(reason.ok_or(RpcError::ProtocolViolation("Missing reason".into()))?),
+            seq: seq.ok_or(Error::ProtocolViolation("Missing seq".into()))?,
+            status: Err(reason.ok_or(Error::ProtocolViolation("Missing reason".into()))?),
         })
     }
 }
@@ -229,7 +229,7 @@ impl<'a> RpcFrame<'a> {
         match msg_type {
             "Call" => Ok(RpcFrame::Call(CallDecoder::decode(body)?)),
             "Reply" => Ok(RpcFrame::Reply(ReplyDecoder::decode(body)?)),
-            _ => Err(RpcError::UnknownVariant(format!("Top-level frame: {}", msg_type))),
+            _ => Err(Error::UnknownVariant(format!("Top-level frame: {}", msg_type))),
         }
     }
 }
@@ -245,7 +245,7 @@ pub fn decode_seq(bytes: &[u8]) -> Result<u64> {
             Ok(mut ok_body) => ok_body.map()?,
             Err(mut err_body) => err_body.map()?,
         },
-        _ => return Err(RpcError::UnknownVariant(format!("Top-level frame: {}", msg_type))),
+        _ => return Err(Error::UnknownVariant(format!("Top-level frame: {}", msg_type))),
     };
 
     while let Some((key, mut val)) = map.next()? {
@@ -256,7 +256,7 @@ pub fn decode_seq(bytes: &[u8]) -> Result<u64> {
         }
     }
 
-    Err(RpcError::ProtocolViolation("Missing seq".into()))
+    Err(Error::ProtocolViolation("Missing seq".into()))
 }
 
 // Helper functions

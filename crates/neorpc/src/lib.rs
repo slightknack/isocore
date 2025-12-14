@@ -16,7 +16,7 @@ mod flag;
 #[cfg(test)]
 mod tests;
 
-pub use error::RpcError;
+pub use error::Error;
 pub use error::FailureReason;
 pub use error::Result;
 pub use frame::RpcFrame;

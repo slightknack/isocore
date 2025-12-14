@@ -13,16 +13,13 @@
 
 use std::sync::Arc;
 
-use neopack::Decoder;
-use neopack::Encoder;
 use neorpc::CallEncoder;
-use neorpc::RpcFrame;
-use neorpc::decode_vals;
 use wasmtime::component::Linker;
 use wasmtime::component::LinkerInstance;
+use wasmtime::component::Type;
 
+use crate::client::Client;
 use crate::context::ExorunCtx;
-use crate::ledger::FunctionSignature;
 use crate::ledger::Ledger;
 use crate::transport::Transport;
 
@@ -45,6 +42,8 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
+pub type Result<T> = std::result::Result<T, Error>;
+
 /// A handle to the resources needed to bind a remote target.
 #[derive(Clone)]
 pub struct RemoteTarget {
@@ -65,20 +64,23 @@ impl Binder {
         ledger: &Ledger,
         interface_name: &str,
         target: RemoteTarget,
-    ) -> Result<(), Error> {
+    ) -> Result<()> {
         let schema = ledger.interfaces.get(interface_name)
             .ok_or_else(|| Error::InterfaceNotFound(interface_name.to_string()))?;
 
-        // We must enter the instance namespace in the linker
-        let mut instance_linker = linker.instance(interface_name)
+        let mut linker_instance = linker.instance(interface_name)
             .map_err(Error::Wasmtime)?;
 
-        for (method_name, signature) in &schema.funcs {
+        // Create the client once for this target
+        let client = Client::new(target.transport);
+
+        for (method_name, signature) in schema.funcs.iter() {
             bind_method(
-                &mut instance_linker,
+                &mut linker_instance,
                 method_name,
-                target.clone(),
-                signature.clone()
+                target.target_id.clone(),
+                client.clone(),
+                signature.results.clone(),
             )?;
         }
 
@@ -86,60 +88,44 @@ impl Binder {
     }
 }
 
-/// Helper to generate the closure for a specific method within an instance.
+/// Generates the async closure for a specific method within an instance.
 fn bind_method(
-    instance_linker: &mut LinkerInstance<ExorunCtx>,
+    linker_instance: &mut LinkerInstance<ExorunCtx>,
     method_name: &str,
-    target: RemoteTarget,
-    signature: FunctionSignature,
-) -> Result<(), Error> {
-    let transport = target.transport;
-    let target_id = target.target_id;
-    let method = method_name.to_string();
+    target_id: String,
+    client: Client,
+    result_types: Vec<Type>,
+) -> Result<()> {
+    let method_name_clone = method_name.to_string();
 
-    instance_linker.func_new_async(method_name, move |store, _func_ty, args, results| {
+    linker_instance.func_new_async(&method_name, move |store, _func_ty, args, results| {
         let seq = store.data().next_seq();
-        let mut enc = Encoder::new();
-        CallEncoder::new(seq, &target_id, &method, args).encode(&mut enc).unwrap();
-        let payload = enc.into_bytes().unwrap();
+        let target_id = target_id.clone();
+        let method_name = method_name_clone.clone();
+        let client = client.clone();
+        let result_types = result_types.clone();
 
-        let transport = transport.clone();
-        let sig = signature.clone();
+        // args is a slice borrowed from the caller. We must clone it to an owned Vec
+        // so it can be moved into the static future.
+        // TODO: maybe encode the args before we put them in call encoder?
+        let args_owned = args.to_vec();
 
         Box::new(async move {
-            let response_bytes = transport.call(&payload).await
-                .map_err(|e| wasmtime::Error::msg(format!("Transport error: {}", e)))?;
+            let encoder = CallEncoder::new(seq, &target_id, &method_name, &args_owned);
+            let return_vals = client.call(encoder, &result_types)
+                .await
+                .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
 
-            let mut dec = Decoder::new(&response_bytes);
-            let frame = RpcFrame::decode(&mut dec)
-                .map_err(|e| wasmtime::Error::msg(format!("RPC decode error: {}", e)))?;
-
-            let reply_vals = match frame {
-                RpcFrame::Call(_) => {
-                    return Err(wasmtime::Error::msg("Protocol violation: received Call frame"));
-                }
-                RpcFrame::Reply(reply) => {
-                    match reply.status {
-                        Ok(val_decoder) => {
-                            decode_vals(val_decoder, &sig.results)
-                                .map_err(|e| wasmtime::Error::msg(format!("Result decode error: {}", e)))?
-                        }
-                        Err(reason) => {
-                            return Err(wasmtime::Error::msg(format!("Remote failure: {:?}", reason)));
-                        }
-                    }
-                }
-            };
-
-            if reply_vals.len() != results.len() {
+            if return_vals.len() != results.len() {
                 return Err(wasmtime::Error::msg(format!(
                     "Result count mismatch: expected {}, got {}",
                     results.len(),
-                    reply_vals.len()
+                    return_vals.len()
                 )));
             }
 
-            for (i, val) in reply_vals.into_iter().enumerate() {
+            // Copy results into the output buffer.
+            for (i, val) in return_vals.into_iter().enumerate() {
                 results[i] = val;
             }
 
@@ -162,15 +148,11 @@ mod tests {
     use wasmtime::Engine;
     use wasmtime::Store;
 
-    struct MockTransport {
-        // Simplified: echo back success with empty results for any call
-        // Real tests would inspect payload
-    }
+    struct MockTransport;
 
     #[async_trait::async_trait]
     impl Transport for MockTransport {
         async fn call(&self, payload: &[u8]) -> crate::transport::Result<Vec<u8>> {
-            // Decode the call to get the sequence number
             let mut dec = Decoder::new(payload);
             let frame = RpcFrame::decode(&mut dec).expect("Mock received invalid frame");
 
@@ -179,7 +161,6 @@ mod tests {
                 _ => panic!("Mock received non-call frame"),
             };
 
-            // Respond with Success (empty results)
             let mut enc = Encoder::new();
             ReplyOkEncoder::new(seq, &[]).encode(&mut enc).unwrap();
             Ok(enc.into_bytes().unwrap())
@@ -215,25 +196,21 @@ mod tests {
         let ledger = Ledger::from_component(&component).unwrap();
 
         let mut linker = Linker::<ExorunCtx>::new(&engine);
-        let transport = Arc::new(MockTransport {});
+        let transport = Arc::new(MockTransport);
         let target = RemoteTarget {
             transport,
             target_id: "service-1".to_string(),
         };
 
-        // Perform the binding
-        Binder::link_remote_interface(
-            &mut linker,
-            &ledger,
-            "my:service/api",
-            target
-        ).expect("Binding failed");
+        Binder::link_remote_interface(&mut linker, &ledger, "my:service/api", target)
+            .expect("Binding failed");
 
-        // Instantiate and run to verify the closure works
         let mut store = Store::new(&engine, ExorunCtx::new());
-        let instance = linker.instantiate_async(&mut store, &component).await.expect("Instantiation failed");
+        let instance = linker.instantiate_async(&mut store, &component).await
+            .expect("Instantiation failed");
 
-        let run = instance.get_typed_func::<(), ()>(&mut store, "run").expect("Get func failed");
+        let run = instance.get_typed_func::<(), ()>(&mut store, "run")
+            .expect("Get func failed");
         run.call_async(&mut store, ()).await.expect("Execution failed");
     }
 
@@ -246,16 +223,12 @@ mod tests {
 
         let mut linker = Linker::<ExorunCtx>::new(&engine);
         let target = RemoteTarget {
-            transport: Arc::new(MockTransport {}),
+            transport: Arc::new(MockTransport),
             target_id: "s".into(),
         };
 
-        let err = Binder::link_remote_interface(
-            &mut linker,
-            &ledger,
-            "missing:interface",
-            target
-        ).unwrap_err();
+        let err = Binder::link_remote_interface(&mut linker, &ledger, "missing:interface", target)
+            .unwrap_err();
 
         match err {
             Error::InterfaceNotFound(name) => assert_eq!(name, "missing:interface"),

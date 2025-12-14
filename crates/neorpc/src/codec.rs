@@ -7,7 +7,7 @@
 //! - **Type Strictness**: Decoding verifies wire tags against the expected `Type` signature.
 
 use crate::error::Result;
-use crate::error::RpcError;
+use crate::error::Error;
 
 use neopack::Decoder;
 use neopack::Encoder;
@@ -28,7 +28,7 @@ pub fn encode_val(enc: &mut Encoder, val: &Val) -> Result<()> {
 
 fn encode_val_impl(enc: &mut Encoder, val: &Val, depth: usize) -> Result<()> {
     if depth > MAX_RECURSION_DEPTH {
-        return Err(RpcError::RecursionLimitExceeded);
+        return Err(Error::RecursionLimitExceeded);
     }
 
     match val {
@@ -123,7 +123,7 @@ fn encode_val_impl(enc: &mut Encoder, val: &Val, depth: usize) -> Result<()> {
             enc.list_end()?;
         },
         Val::Resource(_) | Val::Future(_) | Val::Stream(_) | Val::ErrorContext(_) => {
-            return Err(RpcError::UnsupportedType(val_desc(val).into()));
+            return Err(Error::UnsupportedType(val_desc(val).into()));
         }
     }
     Ok(())
@@ -140,12 +140,12 @@ pub fn decode_vals(mut list_decoder: Decoder, types: &[Type]) -> Result<Vec<Val>
         if let Some(mut item_dec) = list_iter.next() {
             vals.push(decode_val_impl(&mut item_dec, ty, 0)?);
         } else {
-            return Err(RpcError::ProtocolViolation("Fewer args than types".into()));
+            return Err(Error::ProtocolViolation("Fewer args than types".into()));
         }
     }
 
     if list_iter.next().is_some() {
-        return Err(RpcError::ProtocolViolation("More args than types".into()));
+        return Err(Error::ProtocolViolation("More args than types".into()));
     }
 
     Ok(vals)
@@ -158,7 +158,7 @@ pub fn decode_val(dec: &mut Decoder, ty: &Type) -> Result<Val> {
 
 fn decode_val_impl(dec: &mut Decoder, ty: &Type, depth: usize) -> Result<Val> {
     if depth > MAX_RECURSION_DEPTH {
-        return Err(RpcError::RecursionLimitExceeded);
+        return Err(Error::RecursionLimitExceeded);
     }
 
     match ty {
@@ -190,7 +190,7 @@ fn decode_val_impl(dec: &mut Decoder, ty: &Type, depth: usize) -> Result<Val> {
             let mut iter = dec.list()?;
             let mut list = Vec::new();
             for ty in handle.types() {
-                let mut item = iter.next().ok_or(RpcError::ProtocolViolation("Tuple too short".into()))?;
+                let mut item = iter.next().ok_or(Error::ProtocolViolation("Tuple too short".into()))?;
                 list.push(decode_val_impl(&mut item, &ty, depth + 1)?);
             }
             Ok(Val::Tuple(list))
@@ -199,12 +199,12 @@ fn decode_val_impl(dec: &mut Decoder, ty: &Type, depth: usize) -> Result<Val> {
         Type::Record(handle) => {
             let fields: Vec<_> = handle.fields().collect();
             let field_count = fields.len();
-            
+
             let mut record_vals = Vec::with_capacity(field_count);
             for _ in 0..field_count {
                 record_vals.push(None);
             }
-            
+
             let mut iter = dec.map()?;
             while let Some((k, mut v)) = iter.next()? {
                 if let Some(idx) = fields.iter().position(|f| f.name == k) {
@@ -215,13 +215,13 @@ fn decode_val_impl(dec: &mut Decoder, ty: &Type, depth: usize) -> Result<Val> {
                     v.skip()?;
                 }
             }
-            
+
             let mut result = Vec::with_capacity(field_count);
             for (idx, field) in fields.iter().enumerate() {
                 if let Some(val) = record_vals[idx].take() {
                     result.push(val);
                 } else {
-                    return Err(RpcError::MissingField(field.name.to_string()));
+                    return Err(Error::MissingField(field.name.to_string()));
                 }
             }
             Ok(Val::Record(result))
@@ -238,7 +238,7 @@ fn decode_val_impl(dec: &mut Decoder, ty: &Type, depth: usize) -> Result<Val> {
                 };
                 Ok(Val::Variant(name.to_string(), payload))
             } else {
-                Err(RpcError::UnknownVariant(name.to_string()))
+                Err(Error::UnknownVariant(name.to_string()))
             }
         },
 
@@ -248,7 +248,7 @@ fn decode_val_impl(dec: &mut Decoder, ty: &Type, depth: usize) -> Result<Val> {
             if handle.names().any(|n| n == name) {
                 Ok(Val::Enum(name.to_string()))
             } else {
-                Err(RpcError::UnknownVariant(name.to_string()))
+                Err(Error::UnknownVariant(name.to_string()))
             }
         },
 
@@ -291,14 +291,14 @@ fn decode_val_impl(dec: &mut Decoder, ty: &Type, depth: usize) -> Result<Val> {
                 if handle.names().any(|n| n == f) {
                     active.push(f.to_string());
                 } else {
-                    return Err(RpcError::UnknownVariant(f.to_string()));
+                    return Err(Error::UnknownVariant(f.to_string()));
                 }
             }
             Ok(Val::Flags(active))
         },
 
         Type::Own(_) | Type::Borrow(_) | Type::Future(_) | Type::Stream(_) | Type::ErrorContext => {
-            Err(RpcError::UnsupportedType("RPC does not support resources or handles".into()))
+            Err(Error::UnsupportedType("RPC does not support resources or handles".into()))
         },
     }
 }

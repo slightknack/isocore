@@ -303,7 +303,7 @@ fn test_err_missing_field() {
     let bytes = enc.into_bytes().unwrap();
 
     match decode_val(&mut Decoder::new(&bytes), &ty) {
-        Err(RpcError::MissingField(f)) => assert_eq!(f, "x"),
+        Err(Error::MissingField(f)) => assert_eq!(f, "x"),
         _ => panic!("Expected MissingField"),
     }
 }
@@ -318,7 +318,7 @@ fn test_err_unknown_variant() {
     let bytes = enc.into_bytes().unwrap();
 
     match decode_val(&mut Decoder::new(&bytes), &ty) {
-        Err(RpcError::UnknownVariant(f)) => assert_eq!(f, "b"),
+        Err(Error::UnknownVariant(f)) => assert_eq!(f, "b"),
         _ => panic!("Expected UnknownVariant"),
     }
 }
@@ -333,7 +333,7 @@ fn test_err_unknown_flag() {
     let bytes = enc.into_bytes().unwrap();
 
     match decode_val(&mut Decoder::new(&bytes), &ty) {
-        Err(RpcError::UnknownVariant(f)) => assert_eq!(f, "b"),
+        Err(Error::UnknownVariant(f)) => assert_eq!(f, "b"),
         _ => panic!("Expected UnknownVariant for flags"),
     }
 }
@@ -345,7 +345,7 @@ fn test_err_type_mismatch_scalar() {
     let bytes = enc.into_bytes().unwrap();
 
     match decode_val(&mut Decoder::new(&bytes), &Type::U32) {
-        Err(RpcError::Serialization(_)) => {},
+        Err(Error::Serialization(_)) => {},
         _ => panic!("Expected Serialization error (InvalidTag)"),
     }
 }
@@ -360,7 +360,7 @@ fn test_err_tuple_too_short() {
     let bytes = enc.into_bytes().unwrap();
 
     match decode_val(&mut Decoder::new(&bytes), &ty) {
-        Err(RpcError::ProtocolViolation(msg)) => assert!(msg.contains("Tuple too short")),
+        Err(Error::ProtocolViolation(msg)) => assert!(msg.contains("Tuple too short")),
         _ => panic!("Expected ProtocolViolation"),
     }
 }
@@ -385,7 +385,7 @@ fn test_err_rpc_args_count_mismatch_too_few() {
     let bytes = enc.into_bytes().unwrap();
 
     match decode_vals(Decoder::new(&bytes), &types) {
-        Err(RpcError::ProtocolViolation(msg)) => assert!(msg.contains("Fewer")),
+        Err(Error::ProtocolViolation(msg)) => assert!(msg.contains("Fewer")),
         _ => panic!("Expected ProtocolViolation"),
     }
 }
@@ -404,7 +404,7 @@ fn test_err_rpc_args_count_mismatch_too_many() {
     let bytes = enc.into_bytes().unwrap();
 
     match decode_vals(Decoder::new(&bytes), &types) {
-        Err(RpcError::ProtocolViolation(msg)) => assert!(msg.contains("More")),
+        Err(Error::ProtocolViolation(msg)) => assert!(msg.contains("More")),
         _ => panic!("Expected ProtocolViolation"),
     }
 }
@@ -422,7 +422,7 @@ fn test_err_rpc_protocol_missing_seq() {
 
     let bytes = enc.into_bytes().unwrap();
     match decode_frame(&mut Decoder::new(&bytes)) {
-        Err(RpcError::ProtocolViolation(msg)) => assert!(msg.contains("Missing seq")),
+        Err(Error::ProtocolViolation(msg)) => assert!(msg.contains("Missing seq")),
         _ => panic!("Expected ProtocolViolation"),
     }
 }
@@ -440,7 +440,7 @@ fn test_err_rpc_protocol_missing_target() {
 
     let bytes = enc.into_bytes().unwrap();
     match decode_frame(&mut Decoder::new(&bytes)) {
-        Err(RpcError::ProtocolViolation(msg)) => assert!(msg.contains("Missing target")),
+        Err(Error::ProtocolViolation(msg)) => assert!(msg.contains("Missing target")),
         _ => panic!("Expected ProtocolViolation"),
     }
 }
@@ -458,7 +458,7 @@ fn test_err_rpc_protocol_missing_results_in_reply() {
 
     let bytes = enc.into_bytes().unwrap();
     match decode_frame(&mut Decoder::new(&bytes)) {
-        Err(RpcError::ProtocolViolation(msg)) => assert!(msg.contains("Missing results")),
+        Err(Error::ProtocolViolation(msg)) => assert!(msg.contains("Missing results")),
         _ => panic!("Expected ProtocolViolation"),
     }
 }
@@ -483,7 +483,7 @@ fn test_boundary_recursion_limit_just_under() {
     for _ in 0..63 {
         val = Val::List(vec![val]);
     }
-    
+
     let mut enc = Encoder::new();
     encode_val(&mut enc, &val).expect("Should succeed at depth 63");
 }
@@ -494,7 +494,7 @@ fn test_boundary_recursion_limit_exactly_at() {
     for _ in 0..64 {
         val = Val::List(vec![val]);
     }
-    
+
     let mut enc = Encoder::new();
     encode_val(&mut enc, &val).expect("Should succeed at depth 64");
 }
@@ -505,10 +505,10 @@ fn test_boundary_recursion_limit_exceeded() {
     for _ in 0..65 {
         val = Val::List(vec![val]);
     }
-    
+
     let mut enc = Encoder::new();
     match encode_val(&mut enc, &val) {
-        Err(RpcError::RecursionLimitExceeded) => {},
+        Err(Error::RecursionLimitExceeded) => {},
         _ => panic!("Expected RecursionLimitExceeded at depth 65"),
     }
 }
@@ -518,7 +518,7 @@ fn test_boundary_empty_strings_in_rpc_call() {
     let mut enc = Encoder::new();
     encode_call(&mut enc, 0, "", "", &[]).unwrap();
     let bytes = enc.into_bytes().unwrap();
-    
+
     let mut dec = Decoder::new(&bytes);
     match decode_frame(&mut dec).unwrap() {
         RpcFrame::Call(c) => {
@@ -534,7 +534,7 @@ fn test_boundary_empty_strings_in_rpc_call() {
 fn test_boundary_result_unit_unit() {
     let ctx = TypeContext::new(r#"(type $t (result))"#, &["t"]);
     let ty = ctx.get(0);
-    
+
     assert_roundtrip(Val::Result(Ok(None)), ty.clone());
     assert_roundtrip(Val::Result(Err(None)), ty);
 }
@@ -543,7 +543,7 @@ fn test_boundary_result_unit_unit() {
 fn test_boundary_duplicate_flags() {
     let ctx = TypeContext::new(r#"(type $t (flags "a" "b"))"#, &["t"]);
     let ty = ctx.get(0);
-    
+
     let mut enc = Encoder::new();
     enc.list_begin().unwrap();
     enc.str("a").unwrap();
@@ -551,10 +551,10 @@ fn test_boundary_duplicate_flags() {
     enc.str("b").unwrap();
     enc.list_end().unwrap();
     let bytes = enc.into_bytes().unwrap();
-    
+
     let mut dec = Decoder::new(&bytes);
     let decoded = decode_val(&mut dec, &ty).unwrap();
-    
+
     if let Val::Flags(flags) = decoded {
         assert_eq!(flags.len(), 3);
         assert_eq!(flags, vec!["a".to_string(), "a".to_string(), "b".to_string()]);
@@ -567,7 +567,7 @@ fn test_boundary_duplicate_flags() {
 fn test_boundary_record_with_extra_unknown_fields() {
     let ctx = TypeContext::new(r#"(type $t (record (field "x" u32)))"#, &["t"]);
     let ty = ctx.get(0);
-    
+
     let mut enc = Encoder::new();
     enc.map_begin().unwrap();
     enc.variant_begin("x").unwrap(); enc.u32(10).unwrap(); enc.variant_end().unwrap();
@@ -575,10 +575,10 @@ fn test_boundary_record_with_extra_unknown_fields() {
     enc.variant_begin("another").unwrap(); enc.str("ignored").unwrap(); enc.variant_end().unwrap();
     enc.map_end().unwrap();
     let bytes = enc.into_bytes().unwrap();
-    
+
     let mut dec = Decoder::new(&bytes);
     let decoded = decode_val(&mut dec, &ty).unwrap();
-    
+
     if let Val::Record(fields) = decoded {
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].0, "x");
@@ -591,7 +591,7 @@ fn test_boundary_record_with_extra_unknown_fields() {
 fn test_boundary_single_char_variant_name() {
     let ctx = TypeContext::new(r#"(type $t (variant (case "a")))"#, &["t"]);
     let ty = ctx.get(0);
-    
+
     assert_roundtrip(Val::Variant("a".into(), None), ty);
 }
 
@@ -608,10 +608,10 @@ fn test_boundary_rpc_call_with_unknown_header_fields() {
     enc.variant_begin("args").unwrap(); enc.list_begin().unwrap(); enc.list_end().unwrap(); enc.variant_end().unwrap();
     enc.map_end().unwrap();
     enc.variant_end().unwrap();
-    
+
     let bytes = enc.into_bytes().unwrap();
     let mut dec = Decoder::new(&bytes);
-    
+
     match decode_frame(&mut dec).unwrap() {
         RpcFrame::Call(c) => {
             assert_eq!(c.seq, 100);
@@ -629,7 +629,7 @@ fn test_boundary_record_field_ordering_independence() {
         &["t"]
     );
     let ty = ctx.get(0);
-    
+
     let mut enc = Encoder::new();
     enc.map_begin().unwrap();
     enc.variant_begin("c").unwrap(); enc.bool(true).unwrap(); enc.variant_end().unwrap();
@@ -637,10 +637,10 @@ fn test_boundary_record_field_ordering_independence() {
     enc.variant_begin("b").unwrap(); enc.str("hello").unwrap(); enc.variant_end().unwrap();
     enc.map_end().unwrap();
     let bytes = enc.into_bytes().unwrap();
-    
+
     let mut dec = Decoder::new(&bytes);
     let decoded = decode_val(&mut dec, &ty).unwrap();
-    
+
     if let Val::Record(fields) = decoded {
         assert_eq!(fields.len(), 3);
         assert_eq!(fields[0].0, "a");

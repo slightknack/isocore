@@ -13,7 +13,7 @@ use std::fmt;
 
 /// Errors that occur at the network/transport layer.
 #[derive(Debug, Clone)]
-pub enum TransportError {
+pub enum Error {
     /// The peer is unreachable or the connection was dropped.
     ConnectionLost(String),
     /// The operation timed out before a response was received.
@@ -24,7 +24,7 @@ pub enum TransportError {
     Io(String),
 }
 
-impl fmt::Display for TransportError {
+impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ConnectionLost(msg) => write!(f, "Connection lost: {}", msg),
@@ -35,9 +35,9 @@ impl fmt::Display for TransportError {
     }
 }
 
-impl std::error::Error for TransportError {}
+impl std::error::Error for Error {}
 
-pub type Result<T> = std::result::Result<T, TransportError>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// A mechanism to send a byte buffer and receive a reply.
 ///

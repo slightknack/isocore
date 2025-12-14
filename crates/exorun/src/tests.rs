@@ -1,24 +1,23 @@
-//! Tests for the Proxy with mock transports.
+//! Tests for RPC invocation with mock transports.
 
 use std::sync::Arc;
 
 use neopack::Decoder;
 use neopack::Encoder;
-use neorpc::RpcFrame;
-use neorpc::decode_vals;
 use neorpc::CallEncoder;
 use neorpc::FailureReason;
 use neorpc::ReplyOkEncoder;
 use neorpc::ReplyErrEncoder;
+use neorpc::RpcFrame;
+use neorpc::decode_vals;
 use wasmtime::component::Type;
 use wasmtime::component::Val;
 
-use crate::proxy::Proxy;
-use crate::proxy::ProxyError;
-use crate::ledger::FunctionSignature;
+use crate::client::Client;
+use crate::client::Error as ClientError;
 use crate::transport;
 use crate::transport::Transport;
-use crate::transport::TransportError;
+use crate::transport::Error as TransportError;
 
 /// Mock transport that implements a ping->pong server.
 /// Expects a single string argument "ping" and returns "pong".
@@ -130,111 +129,99 @@ impl Transport for MalformedTransport {
     }
 }
 
-fn make_signature(params: Vec<Type>, results: Vec<Type>) -> FunctionSignature {
-    FunctionSignature { params, results }
-}
-
 #[tokio::test]
 async fn test_successful_ping_pong() {
-    let transport = Arc::new(PingPongTransport) as Arc<dyn Transport>;
-
-    let string_ty = Type::String;
-    let sig = make_signature(vec![string_ty.clone()], vec![string_ty]);
+    let transport = Arc::new(PingPongTransport);
+    let client = Client::new(transport);
 
     let args = vec![Val::String("ping".into())];
-    let mut enc = Encoder::new();
-    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
-    let payload = enc.into_bytes().unwrap();
+    let expected_types = vec![Type::String];
 
-    let results = Proxy::invoke(&payload, &transport, &sig).await.unwrap();
+    let encoder = CallEncoder::new(1, "target", "method", &args);
+
+    // We expect 1 return value: "pong"
+    let results = client.call(encoder, &expected_types)
+        .await
+        .expect("Call failed");
 
     assert_eq!(results.len(), 1);
     match &results[0] {
         Val::String(s) => assert_eq!(s, "pong"),
-        _ => panic!("Expected String"),
+        _ => panic!("Expected String result"),
     }
 }
 
 #[tokio::test]
 async fn test_transport_error() {
-    let transport = Arc::new(TimeoutTransport) as Arc<dyn Transport>;
-
-    let u32_ty = Type::U32;
-    let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
+    let transport = Arc::new(TimeoutTransport);
+    let client = Client::new(transport);
 
     let args = vec![Val::U32(42)];
-    let mut enc = Encoder::new();
-    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
-    let payload = enc.into_bytes().unwrap();
+    let expected_types = vec![Type::U32];
 
-    let err = Proxy::invoke(&payload, &transport, &sig).await.unwrap_err();
+    let encoder = CallEncoder::new(1, "target", "method", &args);
+
+    let err = client.call(encoder, &expected_types).await.unwrap_err();
 
     match err {
-        ProxyError::Transport(TransportError::Timeout) => {},
+        ClientError::Transport(TransportError::Timeout) => {},
         _ => panic!("Expected Transport(Timeout), got {:?}", err),
     }
 }
 
 #[tokio::test]
 async fn test_rpc_protocol_violation_call_frame() {
-    let transport = Arc::new(CallReturningTransport) as Arc<dyn Transport>;
-
-    let u32_ty = Type::U32;
-    let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
+    let transport = Arc::new(CallReturningTransport);
+    let client = Client::new(transport);
 
     let args = vec![Val::U32(42)];
-    let mut enc = Encoder::new();
-    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
-    let payload = enc.into_bytes().unwrap();
+    let expected_types = vec![Type::U32];
 
-    let err = Proxy::invoke(&payload, &transport, &sig).await.unwrap_err();
+    let encoder = CallEncoder::new(1, "target", "method", &args);
+
+    let err = client.call(encoder, &expected_types).await.unwrap_err();
 
     match err {
-        ProxyError::Rpc(e) => {
+        ClientError::NeoRpc(e) => {
             assert!(format!("{}", e).contains("Received Call frame"));
         },
-        _ => panic!("Expected Rpc error, got {:?}", err),
+        _ => panic!("Expected NeoRpc error, got {:?}", err),
     }
 }
 
 #[tokio::test]
 async fn test_rpc_malformed_frame() {
-    let transport = Arc::new(MalformedTransport) as Arc<dyn Transport>;
-
-    let u32_ty = Type::U32;
-    let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
+    let transport = Arc::new(MalformedTransport);
+    let client = Client::new(transport);
 
     let args = vec![Val::U32(42)];
-    let mut enc = Encoder::new();
-    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
-    let payload = enc.into_bytes().unwrap();
+    let expected_types = vec![Type::U32];
 
-    let err = Proxy::invoke(&payload, &transport, &sig).await.unwrap_err();
+    let encoder = CallEncoder::new(1, "target", "method", &args);
+
+    let err = client.call(encoder, &expected_types).await.unwrap_err();
 
     match err {
-        ProxyError::Rpc(_) => {},
-        _ => panic!("Expected Rpc error, got {:?}", err),
+        // Depending on whether neopack or neorpc catches it first
+        ClientError::NeoRpc(_) | ClientError::NeoPack(_) => {},
+        _ => panic!("Expected framing error, got {:?}", err),
     }
 }
 
 #[tokio::test]
 async fn test_remote_failure() {
-    let transport = Arc::new(FailureTransport) as Arc<dyn Transport>;
-
-    let u32_ty = Type::U32;
-    let sig = make_signature(vec![u32_ty.clone()], vec![u32_ty]);
+    let transport = Arc::new(FailureTransport);
+    let client = Client::new(transport);
 
     let args = vec![Val::U32(42)];
-    let mut enc = Encoder::new();
-    CallEncoder::new(1, "target", "method", &args).encode(&mut enc).unwrap();
-    let payload = enc.into_bytes().unwrap();
+    let expected_types = vec![Type::U32];
 
-    let err = Proxy::invoke(&payload, &transport, &sig).await.unwrap_err();
+    let encoder = CallEncoder::new(1, "target", "method", &args);
+
+    let err = client.call(encoder, &expected_types).await.unwrap_err();
 
     match err {
-        ProxyError::Remote(FailureReason::AppTrapped) => {},
+        ClientError::Remote(FailureReason::AppTrapped) => {},
         _ => panic!("Expected Remote(AppTrapped), got {:?}", err),
     }
 }
-
-

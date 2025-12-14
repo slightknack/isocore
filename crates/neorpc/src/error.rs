@@ -7,7 +7,7 @@ use neopack::Error as NeoError;
 
 /// Operational failures within the RPC mechanism itself.
 #[derive(Debug, Clone)]
-pub enum RpcError {
+pub enum Error {
     /// The underlying Neopack serialization failed (e.g., buffer exhaustion).
     Serialization(NeoError),
     /// The wire types did not match the expected Wasmtime types.
@@ -24,20 +24,20 @@ pub enum RpcError {
     RecursionLimitExceeded,
 }
 
-impl std::fmt::Display for RpcError {
+impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-impl std::error::Error for RpcError {}
+impl std::error::Error for Error {}
 
-impl From<NeoError> for RpcError {
+impl From<NeoError> for Error {
     fn from(e: NeoError) -> Self { Self::Serialization(e) }
 }
 
 /// A specialized Result type for RPC operations.
-pub type Result<T> = std::result::Result<T, RpcError>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// Reasons for an RPC failure (The "Err" side of a Reply).
 ///
@@ -74,7 +74,7 @@ impl FailureReason {
             Self::ProtocolViolation(_) => "ProtoVio",
         }
     }
-    
+
     /// Parse a failure reason from its wire representation tag.
     pub fn from_tag(tag: &str) -> Result<Self> {
         match tag {
@@ -85,7 +85,7 @@ impl FailureReason {
             "NoMethod" => Ok(Self::MethodNotFound),
             "BadArgs" => Ok(Self::BadArgumentCount),
             "ProtoVio" => Ok(Self::ProtocolViolation("Remote protocol violation".into())),
-            other => Err(RpcError::UnknownVariant(format!("FailureReason: {}", other))),
+            other => Err(Error::UnknownVariant(format!("FailureReason: {}", other))),
         }
     }
 }
