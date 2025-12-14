@@ -223,16 +223,17 @@ fn test_rpc_call_roundtrip() {
     let arg_types = vec![arg_ty];
 
     let mut enc = Encoder::new();
-    encode_call(&mut enc, 1, "svc", "method", &args).unwrap();
+    CallEncoder::new(1, "svc", "method", &args).encode(&mut enc).unwrap();
     let bytes = enc.into_bytes().unwrap();
 
     let mut dec = Decoder::new(&bytes);
-    match decode_frame(&mut dec).unwrap() {
+    match RpcFrame::decode(&mut dec).unwrap() {
         RpcFrame::Call(c) => {
             assert_eq!(c.seq, 1);
             assert_eq!(c.target, "svc");
             assert_eq!(c.method, "method");
-            let d_args = decode_vals(c.args_decoder, &arg_types).unwrap();
+            // c.args is now a Decoder, not c.args_decoder
+            let d_args = decode_vals(c.args, &arg_types).unwrap();
             assert_eq!(format!("{:?}", args), format!("{:?}", d_args));
         }
         _ => panic!("Expected Call"),
@@ -246,11 +247,11 @@ fn test_rpc_reply_success_roundtrip() {
     let results = vec![Val::String("ok".into())];
 
     let mut enc = Encoder::new();
-    encode_reply_success(&mut enc, 2, &results).unwrap();
+    ReplyOkEncoder::new(2, &results).encode(&mut enc).unwrap();
     let bytes = enc.into_bytes().unwrap();
 
     let mut dec = Decoder::new(&bytes);
-    match decode_frame(&mut dec).unwrap() {
+    match RpcFrame::decode(&mut dec).unwrap() {
         RpcFrame::Reply(r) => {
             assert_eq!(r.seq, 2);
             let val_dec = r.status.expect("Expected Success");
@@ -264,11 +265,12 @@ fn test_rpc_reply_success_roundtrip() {
 #[test]
 fn test_rpc_reply_failure_roundtrip() {
     let mut enc = Encoder::new();
-    encode_reply_failure(&mut enc, 3, &FailureReason::OutOfFuel).unwrap();
+    // ReplyErrEncoder takes failure reason by value
+    ReplyErrEncoder::new(3, FailureReason::OutOfFuel).encode(&mut enc).unwrap();
     let bytes = enc.into_bytes().unwrap();
 
     let mut dec = Decoder::new(&bytes);
-    match decode_frame(&mut dec).unwrap() {
+    match RpcFrame::decode(&mut dec).unwrap() {
         RpcFrame::Reply(r) => {
             assert_eq!(r.seq, 3);
             match r.status {
@@ -283,14 +285,14 @@ fn test_rpc_reply_failure_roundtrip() {
 #[test]
 fn test_rpc_sequence_skippable() {
     let mut enc = Encoder::new();
-    encode_call(&mut enc, 1, "a", "b", &[]).unwrap();
-    encode_reply_failure(&mut enc, 1, &FailureReason::AppTrapped).unwrap();
+    CallEncoder::new(1, "a", "b", &[]).encode(&mut enc).unwrap();
+    ReplyErrEncoder::new(1, FailureReason::AppTrapped).encode(&mut enc).unwrap();
 
     let bytes = enc.into_bytes().unwrap();
     let mut dec = Decoder::new(&bytes);
 
-    assert!(matches!(decode_frame(&mut dec).unwrap(), RpcFrame::Call(_)));
-    assert!(matches!(decode_frame(&mut dec).unwrap(), RpcFrame::Reply(_)));
+    assert!(matches!(RpcFrame::decode(&mut dec).unwrap(), RpcFrame::Call(_)));
+    assert!(matches!(RpcFrame::decode(&mut dec).unwrap(), RpcFrame::Reply(_)));
 }
 
 #[test]
@@ -421,7 +423,7 @@ fn test_err_rpc_protocol_missing_seq() {
     enc.variant_end().unwrap();
 
     let bytes = enc.into_bytes().unwrap();
-    match decode_frame(&mut Decoder::new(&bytes)) {
+    match RpcFrame::decode(&mut Decoder::new(&bytes)) {
         Err(Error::ProtocolViolation(msg)) => assert!(msg.contains("Missing seq")),
         _ => panic!("Expected ProtocolViolation"),
     }
@@ -439,7 +441,7 @@ fn test_err_rpc_protocol_missing_target() {
     enc.variant_end().unwrap();
 
     let bytes = enc.into_bytes().unwrap();
-    match decode_frame(&mut Decoder::new(&bytes)) {
+    match RpcFrame::decode(&mut Decoder::new(&bytes)) {
         Err(Error::ProtocolViolation(msg)) => assert!(msg.contains("Missing target")),
         _ => panic!("Expected ProtocolViolation"),
     }
@@ -457,7 +459,7 @@ fn test_err_rpc_protocol_missing_results_in_reply() {
     enc.variant_end().unwrap();
 
     let bytes = enc.into_bytes().unwrap();
-    match decode_frame(&mut Decoder::new(&bytes)) {
+    match RpcFrame::decode(&mut Decoder::new(&bytes)) {
         Err(Error::ProtocolViolation(msg)) => assert!(msg.contains("Missing results")),
         _ => panic!("Expected ProtocolViolation"),
     }
@@ -516,11 +518,11 @@ fn test_boundary_recursion_limit_exceeded() {
 #[test]
 fn test_boundary_empty_strings_in_rpc_call() {
     let mut enc = Encoder::new();
-    encode_call(&mut enc, 0, "", "", &[]).unwrap();
+    CallEncoder::new(0, "", "", &[]).encode(&mut enc).unwrap();
     let bytes = enc.into_bytes().unwrap();
 
     let mut dec = Decoder::new(&bytes);
-    match decode_frame(&mut dec).unwrap() {
+    match RpcFrame::decode(&mut dec).unwrap() {
         RpcFrame::Call(c) => {
             assert_eq!(c.seq, 0);
             assert_eq!(c.target, "");
@@ -612,7 +614,7 @@ fn test_boundary_rpc_call_with_unknown_header_fields() {
     let bytes = enc.into_bytes().unwrap();
     let mut dec = Decoder::new(&bytes);
 
-    match decode_frame(&mut dec).unwrap() {
+    match RpcFrame::decode(&mut dec).unwrap() {
         RpcFrame::Call(c) => {
             assert_eq!(c.seq, 100);
             assert_eq!(c.target, "svc");
