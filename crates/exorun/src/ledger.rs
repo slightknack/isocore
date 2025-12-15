@@ -68,12 +68,19 @@ impl Ledger {
     /// Introspects a Component to build a Ledger of its imports.
     ///
     /// Returns an error if the component imports resources, futures, or streams.
+    /// WASI imports are excluded from validation as they are system components.
     pub fn from_component(component: &Component) -> Result<Self> {
         let engine = component.engine();
         let mut interfaces = HashMap::new();
 
         for (name, item) in component.component_type().imports(engine) {
             let ComponentItem::ComponentInstance(inst_ty) = item else { continue };
+            
+            // Skip WASI interfaces - they're system components, not RPC targets
+            if name.starts_with("wasi:") {
+                continue;
+            }
+            
             let interface = InterfaceSchema::from_inst_ty(engine, name, inst_ty)?;
             if interface.funcs.is_empty() { continue; }
             interfaces.insert(name.to_string(), interface);

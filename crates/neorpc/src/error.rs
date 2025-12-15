@@ -59,6 +59,9 @@ pub enum FailureReason {
     BadArgumentCount,
     /// The RPC frame was malformed.
     ProtocolViolation(String),
+    /// Application-specific domain error (e.g., auth failure, business logic violation).
+    /// Contains (error_code, description) for programmatic handling.
+    DomainSpecific(u32, String),
 }
 
 impl FailureReason {
@@ -72,6 +75,7 @@ impl FailureReason {
             Self::MethodNotFound => "NoMethod",
             Self::BadArgumentCount => "BadArgs",
             Self::ProtocolViolation(_) => "ProtoVio",
+            Self::DomainSpecific(_, _) => "Domain",
         }
     }
 
@@ -85,6 +89,7 @@ impl FailureReason {
             "NoMethod" => Ok(Self::MethodNotFound),
             "BadArgs" => Ok(Self::BadArgumentCount),
             "ProtoVio" => Ok(Self::ProtocolViolation("Remote protocol violation".into())),
+            "Domain" => Ok(Self::DomainSpecific(0, "Domain error".into())),
             other => Err(Error::UnknownVariant(format!("FailureReason: {}", other))),
         }
     }

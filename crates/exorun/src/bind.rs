@@ -13,14 +13,15 @@
 
 use std::sync::Arc;
 
-use neopack::Encoder;
-use neorpc::CallEncoder;
 use wasmtime::component::Linker;
 use wasmtime::component::LinkerInstance;
 use wasmtime::component::Type;
+use wasmtime::component::Val;
 
 use crate::client::Client;
 use crate::context::ExorunCtx;
+use crate::instance::InstanceHandle;
+use crate::instance::State;
 use crate::ledger::Ledger;
 use crate::transport::Transport;
 
@@ -87,6 +88,35 @@ impl Binder {
 
         Ok(())
     }
+
+    /// Links a specific interface to a local instance.
+    ///
+    /// This creates direct bindings to another Wasm instance in the same process,
+    /// bypassing serialization and using direct Val-to-Val calls.
+    pub fn link_local_interface(
+        linker: &mut Linker<ExorunCtx>,
+        ledger: &Ledger,
+        interface_name: &str,
+        target: InstanceHandle,
+    ) -> Result<()> {
+        let schema = ledger.interfaces.get(interface_name)
+            .ok_or_else(|| Error::InterfaceNotFound(interface_name.to_string()))?;
+
+        let mut linker_instance = linker.instance(interface_name)
+            .map_err(Error::Wasmtime)?;
+
+        for (method_name, signature) in schema.funcs.iter() {
+            bind_local_method(
+                &mut linker_instance,
+                method_name,
+                target.clone(),
+                signature.params.len(),
+                signature.results.len(),
+            )?;
+        }
+
+        Ok(())
+    }
 }
 
 // TODO: we pass result types here but maybe we can
@@ -103,25 +133,36 @@ fn bind_method(
 ) -> Result<()> {
     let method_name_clone = method_name.to_string();
 
-    linker_instance.func_new_async(method_name, move |store, _func_ty, args, results| {
-        // sadly we must clone
-        let seq = store.data().next_seq();
+    linker_instance.func_new_async(method_name, move |_store, _func_ty, args, results| {
+        use neopack::Encoder;
+        use neorpc::CallEncoder;
+        
         let client = client.clone();
         let result_types = result_types.clone();
+        let target_id = target_id.clone();
+        let method_name = method_name_clone.clone();
 
-        // prepare the payload with love
-        let call = CallEncoder::new(seq, &target_id, &method_name_clone, args);
-        let payload = encode_payload(call);
-
-        // I like your funny words, magic man
         Box::new(async move {
-            // drop the bomb, so to speak
-            let payload = payload?;
-            let return_vals = client.call(&payload, &result_types)
+            // Prepare the call (increments seq and inserts pending)
+            let (seq, rx) = client.prepare_call(result_types);
+            
+            // Encode arguments directly without copying
+            let args_bytes = neorpc::encode_vals_to_bytes(args)
+                .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
+            
+            // Build the payload using CallEncoder
+            let mut enc = Encoder::new();
+            CallEncoder::new(seq, &target_id, &method_name, &args_bytes)
+                .encode(&mut enc)
+                .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
+            let payload = enc.into_bytes()
+                .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
+            
+            // Send and await response
+            let return_vals = client.send_and_await(seq, payload, rx)
                 .await
                 .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
 
-            // trust but verify
             if return_vals.len() != results.len() {
                 return Err(wasmtime::Error::msg(format!(
                     "Result count mismatch: expected {}, got {}",
@@ -130,7 +171,6 @@ fn bind_method(
                 )));
             }
 
-            // TODO: instead of copying, decode directly?
             for (i, val) in return_vals.into_iter().enumerate() {
                 results[i] = val;
             }
@@ -142,10 +182,51 @@ fn bind_method(
     Ok(())
 }
 
-fn encode_payload(call: CallEncoder) -> std::result::Result<Vec<u8>, wasmtime::Error> {
-    let mut enc = Encoder::new();
-    call.encode(&mut enc).map_err(|e| wasmtime::Error::msg(e.to_string()))?;
-    enc.into_bytes().map_err(|e| wasmtime::Error::msg(e.to_string()))
+/// Generates the async closure for a local method call to another instance.
+fn bind_local_method(
+    linker_instance: &mut LinkerInstance<ExorunCtx>,
+    method_name: &str,
+    target: InstanceHandle,
+    _param_count: usize,
+    result_count: usize,
+) -> Result<()> {
+    let method_name_owned = method_name.to_string();
+
+    linker_instance.func_new_async(method_name, move |_store, _func_ty, args, results| {
+        let target = target.clone();
+        let method_name = method_name_owned.clone();
+        let args_vec: Vec<Val> = args.to_vec();
+
+        Box::new(async move {
+            // Lock the target instance and call the function
+            let mut guard = target.inner.lock().await;
+            let State { store, instance } = &mut *guard;
+            
+            let func = instance
+                .get_func(&mut *store, &method_name)
+                .ok_or_else(|| wasmtime::Error::msg(format!("Method '{}' not found", method_name)))?;
+
+            let mut call_results = vec![Val::Bool(false); result_count];
+            func.call_async(&mut *store, &args_vec, &mut call_results)
+                .await?;
+
+            if call_results.len() != results.len() {
+                return Err(wasmtime::Error::msg(format!(
+                    "Result count mismatch: expected {}, got {}",
+                    results.len(),
+                    call_results.len()
+                )));
+            }
+
+            for (i, val) in call_results.into_iter().enumerate() {
+                results[i] = val;
+            }
+
+            Ok(())
+        })
+    }).map_err(Error::Wasmtime)?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -156,15 +237,28 @@ mod tests {
     use neopack::Encoder;
     use neorpc::ReplyOkEncoder;
     use neorpc::RpcFrame;
+    use neorpc::encode_vals_to_bytes;
     use wasmtime::component::Component;
     use wasmtime::Engine;
     use wasmtime::Store;
 
-    struct MockTransport;
+    use tokio::sync::Mutex;
+
+    struct MockTransport {
+        pending: Arc<Mutex<Option<Vec<u8>>>>,
+    }
+
+    impl MockTransport {
+        fn new() -> Self {
+            Self {
+                pending: Arc::new(Mutex::new(None)),
+            }
+        }
+    }
 
     #[async_trait::async_trait]
     impl Transport for MockTransport {
-        async fn call(&self, payload: &[u8]) -> crate::transport::Result<Vec<u8>> {
+        async fn send(&self, payload: &[u8]) -> crate::transport::Result<()> {
             let mut dec = Decoder::new(payload);
             let frame = RpcFrame::decode(&mut dec).expect("Mock received invalid frame");
 
@@ -174,8 +268,15 @@ mod tests {
             };
 
             let mut enc = Encoder::new();
-            ReplyOkEncoder::new(seq, &[]).encode(&mut enc).unwrap();
-            Ok(enc.into_bytes().unwrap())
+            let empty_bytes = encode_vals_to_bytes(&[]).unwrap();
+            ReplyOkEncoder::new(seq, &empty_bytes).encode(&mut enc).unwrap();
+            let response = enc.into_bytes().unwrap();
+            *self.pending.lock().await = Some(response);
+            Ok(())
+        }
+
+        async fn recv(&self) -> crate::transport::Result<Option<Vec<u8>>> {
+            Ok(self.pending.lock().await.take())
         }
     }
 
@@ -208,7 +309,7 @@ mod tests {
         let ledger = Ledger::from_component(&component).unwrap();
 
         let mut linker = Linker::<ExorunCtx>::new(&engine);
-        let transport = Arc::new(MockTransport);
+        let transport = Arc::new(MockTransport::new());
         let target = RemoteTarget {
             transport,
             target_id: "service-1".to_string(),
@@ -235,7 +336,7 @@ mod tests {
 
         let mut linker = Linker::<ExorunCtx>::new(&engine);
         let target = RemoteTarget {
-            transport: Arc::new(MockTransport),
+            transport: Arc::new(MockTransport::new()),
             target_id: "s".into(),
         };
 

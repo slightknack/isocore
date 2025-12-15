@@ -374,6 +374,17 @@ impl Encoder {
         Ok(())
     }
 
+    /// Appends pre-encoded neopack bytes directly to the buffer.
+    ///
+    /// This is used to inject already-encoded data (like a pre-encoded list of values)
+    /// into the stream without re-encoding. The caller must ensure the bytes are valid
+    /// neopack-encoded data.
+    pub fn append_raw(&mut self, v: &[u8]) -> Result<()> {
+        self.buf.extend_from_slice(v);
+        self.on_item_written();
+        Ok(())
+    }
+
     /// Begins a List container.
     ///
     /// # Invariants

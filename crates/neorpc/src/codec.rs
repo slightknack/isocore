@@ -26,6 +26,20 @@ pub fn encode_val(enc: &mut Encoder, val: &Val) -> Result<()> {
     encode_val_impl(enc, val, 0)
 }
 
+/// Encodes a list of `wasmtime::component::Val` into a byte vector.
+///
+/// This produces a neopack-encoded list suitable for use as a pre-encoded
+/// payload in frame encoders.
+pub fn encode_vals_to_bytes(vals: &[Val]) -> Result<Vec<u8>> {
+    let mut enc = Encoder::new();
+    enc.list_begin()?;
+    for val in vals {
+        encode_val(&mut enc, val)?;
+    }
+    enc.list_end()?;
+    enc.into_bytes().map_err(Error::from)
+}
+
 fn encode_val_impl(enc: &mut Encoder, val: &Val, depth: usize) -> Result<()> {
     if depth > MAX_RECURSION_DEPTH {
         return Err(Error::RecursionLimitExceeded);

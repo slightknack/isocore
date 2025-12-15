@@ -3,10 +3,71 @@
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use wasmtime::component::ResourceTable;
+use wasmtime_wasi::WasiCtx;
+use wasmtime_wasi::WasiCtxBuilder;
+use wasmtime_wasi::WasiCtxView;
+use wasmtime_wasi::WasiView;
+
+/// Builder for constructing an ExorunCtx.
+///
+/// Provides a fluent API for configuring WASI capabilities and user data
+/// before finalizing the context for instance execution.
+pub struct ContextBuilder {
+    pub wasi: WasiCtxBuilder,
+    pub user_data: anymap::Map<dyn anymap::any::Any + Send + Sync>,
+}
+
+impl ContextBuilder {
+    pub fn new() -> Self {
+        Self {
+            wasi: WasiCtxBuilder::new(),
+            user_data: anymap::Map::new(),
+        }
+    }
+
+    pub fn inherit_stdio(mut self) -> Self {
+        self.wasi.inherit_stdio();
+        self
+    }
+
+    pub fn inherit_env(mut self) -> Self {
+        self.wasi.inherit_env();
+        self
+    }
+
+    pub fn env(mut self, key: impl AsRef<str>, value: impl AsRef<str>) -> Self {
+        self.wasi.env(key.as_ref(), value.as_ref());
+        self
+    }
+
+    pub fn insert<T: anymap::any::Any + Send + Sync>(&mut self, data: T) {
+        self.user_data.insert(data);
+    }
+
+    pub fn build(mut self) -> ExorunCtx {
+        ExorunCtx {
+            seq: AtomicU64::new(1),
+            wasi: self.wasi.build(),
+            table: ResourceTable::new(),
+            user_data: self.user_data,
+        }
+    }
+}
+
+impl Default for ContextBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Per-instance execution context stored in Wasmtime's Store.
 ///
-/// Holds mutable state scoped to a single component instance. Each instance
-/// maintains independent sequence numbering for RPC correlation.
+/// Holds mutable state scoped to a single component instance. Provides:
+/// - RPC sequence numbering for correlation
+/// - WASI capabilities (filesystem, environment, stdio)
+/// - Resource table for WASI resource management
+/// - Type-safe user data injection via AnyMap
 ///
 /// # Thread Safety
 ///
@@ -15,14 +76,15 @@ use std::sync::atomic::Ordering;
 /// without requiring &mut self.
 pub struct ExorunCtx {
     seq: AtomicU64,
+    pub(crate) wasi: WasiCtx,
+    pub(crate) table: ResourceTable,
+    pub(crate) user_data: anymap::Map<dyn anymap::any::Any + Send + Sync>,
 }
 
 impl ExorunCtx {
-    /// Creates a new context with sequence numbering starting at 1.
+    /// Creates a new context with default WASI capabilities.
     pub fn new() -> Self {
-        Self {
-            seq: AtomicU64::new(1),
-        }
+        ContextBuilder::new().build()
     }
 
     /// Generates the next sequence number for outbound RPC calls.
@@ -32,10 +94,24 @@ impl ExorunCtx {
     pub(crate) fn next_seq(&self) -> u64 {
         self.seq.fetch_add(1, Ordering::Relaxed)
     }
+
+    /// Retrieves user data by type.
+    pub fn get<T: anymap::any::Any + Send + Sync>(&self) -> Option<&T> {
+        self.user_data.get::<T>()
+    }
 }
 
 impl Default for ExorunCtx {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl WasiView for ExorunCtx {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
     }
 }

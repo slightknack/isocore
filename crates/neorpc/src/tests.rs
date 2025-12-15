@@ -1,4 +1,5 @@
 use crate::*;
+use crate::encode_vals_to_bytes;
 
 use neopack::Decoder;
 use neopack::Encoder;
@@ -223,7 +224,8 @@ fn test_rpc_call_roundtrip() {
     let arg_types = vec![arg_ty];
 
     let mut enc = Encoder::new();
-    CallEncoder::new(1, "svc", "method", &args).encode(&mut enc).unwrap();
+    let args_bytes = encode_vals_to_bytes(&args).unwrap();
+    CallEncoder::new(1, "svc", "method", &args_bytes).encode(&mut enc).unwrap();
     let bytes = enc.into_bytes().unwrap();
 
     let mut dec = Decoder::new(&bytes);
@@ -247,7 +249,8 @@ fn test_rpc_reply_success_roundtrip() {
     let results = vec![Val::String("ok".into())];
 
     let mut enc = Encoder::new();
-    ReplyOkEncoder::new(2, &results).encode(&mut enc).unwrap();
+    let results_bytes = encode_vals_to_bytes(&results).unwrap();
+    ReplyOkEncoder::new(2, &results_bytes).encode(&mut enc).unwrap();
     let bytes = enc.into_bytes().unwrap();
 
     let mut dec = Decoder::new(&bytes);
@@ -285,7 +288,8 @@ fn test_rpc_reply_failure_roundtrip() {
 #[test]
 fn test_rpc_sequence_skippable() {
     let mut enc = Encoder::new();
-    CallEncoder::new(1, "a", "b", &[]).encode(&mut enc).unwrap();
+    let empty_bytes = encode_vals_to_bytes(&[]).unwrap();
+    CallEncoder::new(1, "a", "b", &empty_bytes).encode(&mut enc).unwrap();
     ReplyErrEncoder::new(1, FailureReason::AppTrapped).encode(&mut enc).unwrap();
 
     let bytes = enc.into_bytes().unwrap();
@@ -518,7 +522,8 @@ fn test_boundary_recursion_limit_exceeded() {
 #[test]
 fn test_boundary_empty_strings_in_rpc_call() {
     let mut enc = Encoder::new();
-    CallEncoder::new(0, "", "", &[]).encode(&mut enc).unwrap();
+    let empty_bytes = encode_vals_to_bytes(&[]).unwrap();
+    CallEncoder::new(0, "", "", &empty_bytes).encode(&mut enc).unwrap();
     let bytes = enc.into_bytes().unwrap();
 
     let mut dec = Decoder::new(&bytes);
@@ -650,5 +655,86 @@ fn test_boundary_record_field_ordering_independence() {
         assert_eq!(fields[2].0, "c");
     } else {
         panic!("Expected Record");
+    }
+}
+
+/// Frame Isolation Test: Verify that CallEncoder treats args_payload as opaque bytes.
+///
+/// This test proves the decoupling of framing from codec by injecting pre-encoded
+/// neopack data and verifying the frame structure remains intact.
+#[test]
+fn test_frame_isolation_call_encoder() {
+    // Create a valid pre-encoded list with one U32 value
+    // This simulates what encode_vals_to_bytes would produce
+    let mut args_enc = Encoder::new();
+    args_enc.list_begin().unwrap();
+    args_enc.u32(12345).unwrap();
+    args_enc.list_end().unwrap();
+    let args_payload = args_enc.into_bytes().unwrap();
+    
+    // Now encode a Call frame using this pre-encoded payload
+    let mut enc = Encoder::new();
+    CallEncoder::new(42, "test-target", "test-method", &args_payload)
+        .encode(&mut enc)
+        .unwrap();
+    let bytes = enc.into_bytes().unwrap();
+    
+    // Decode and verify the frame structure
+    let mut dec = Decoder::new(&bytes);
+    let frame = RpcFrame::decode(&mut dec).unwrap();
+    
+    match frame {
+        RpcFrame::Call(mut call) => {
+            assert_eq!(call.seq, 42);
+            assert_eq!(call.target, "test-target");
+            assert_eq!(call.method, "test-method");
+            
+            // Decode the args to verify they match what we encoded
+            let mut list_iter = call.args.list().unwrap();
+            let mut item = list_iter.next().unwrap();
+            let val = item.u32().unwrap();
+            assert_eq!(val, 12345);
+        }
+        _ => panic!("Expected Call frame"),
+    }
+}
+
+/// Frame Isolation Test: Verify that ReplyOkEncoder treats results_payload as opaque bytes.
+#[test]
+fn test_frame_isolation_reply_ok_encoder() {
+    // Create a valid pre-encoded list with one string value
+    let mut results_enc = Encoder::new();
+    results_enc.list_begin().unwrap();
+    results_enc.str("success").unwrap();
+    results_enc.list_end().unwrap();
+    let results_payload = results_enc.into_bytes().unwrap();
+    
+    // Now encode a Reply frame using this pre-encoded payload
+    let mut enc = Encoder::new();
+    ReplyOkEncoder::new(99, &results_payload)
+        .encode(&mut enc)
+        .unwrap();
+    let bytes = enc.into_bytes().unwrap();
+    
+    // Decode and verify the frame structure
+    let mut dec = Decoder::new(&bytes);
+    let frame = RpcFrame::decode(&mut dec).unwrap();
+    
+    match frame {
+        RpcFrame::Reply(reply) => {
+            assert_eq!(reply.seq, 99);
+            assert!(reply.status.is_ok(), "Expected success reply");
+            
+            // Decode the results to verify they match what we encoded
+            if let Ok(mut results_dec) = reply.status {
+                let mut list_iter = results_dec.list().unwrap();
+                let mut item = list_iter.next().unwrap();
+                let val = item.str().unwrap();
+                assert_eq!(val, "success");
+            } else {
+                panic!("Expected Ok status");
+            }
+        }
+        _ => panic!("Expected Reply frame"),
     }
 }

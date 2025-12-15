@@ -9,6 +9,10 @@ wasmtime = { workspace = true, features = ["component-model"] }
 wasmtime-wasi = { workspace = true }
 neopack = { path = "../neopack" }
 neorpc = { path = "../neorpc" }
+dashmap = { workspace = true }
+anymap = { workspace = true }
+tokio = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
+rand = { workspace = true }

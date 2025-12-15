@@ -27,6 +27,7 @@ pub use frame::ReplyErrEncoder;
 pub use frame::ReplyDecoder;
 pub use frame::decode_seq;
 pub use codec::encode_val;
+pub use codec::encode_vals_to_bytes;
 pub use codec::decode_val;
 pub use codec::decode_vals;
 pub use flag::encode_flags_bitmap;

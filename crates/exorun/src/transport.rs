@@ -6,8 +6,8 @@
 //!
 //! - **Byte-Oriented**: The Transport knows nothing about RPC frames, Val, or Types.
 //!   It moves opaque buffers.
-//! - **Request-Response**: The fundamental interaction model is "send bytes, await bytes".
-//!   One-way messages or streams are built on top of this, not defined here.
+//! - **Message-Passing**: The fundamental interaction model is asynchronous message passing.
+//!   Request-response, streams, and other patterns are built on top using sequence numbers.
 
 use std::fmt;
 
@@ -39,18 +39,34 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// A mechanism to send a byte buffer and receive a reply.
+/// A mechanism for asynchronous message passing between runtimes.
 ///
 /// This trait is designed to be object-safe (`Arc<dyn Transport>`).
+/// It provides low-level message send/receive primitives. Higher-level
+/// patterns like request-response are implemented in the Client.
 #[async_trait::async_trait]
 pub trait Transport: Send + Sync + 'static {
-    /// Sends a payload and waits for a response.
+    /// Queues a raw message for transmission.
     ///
-    /// This is a blocking operation from the perspective of the async task.
+    /// This should handle framing (e.g., length-prefixing) appropriate for the
+    /// underlying stream. The method returns immediately after queuing.
     ///
-    /// # invariants
-    /// - Must return `Ok(vec)` with the raw reply bytes on success.
-    /// - Must return `Err` if the network fails.
-    /// - Should not interpret the payload content (e.g. no JSON parsing).
-    async fn call(&self, payload: &[u8]) -> Result<Vec<u8>>;
+    /// # Invariants
+    /// - Must not block on network I/O
+    /// - Should return `Err` only on permanent failures
+    async fn send(&self, payload: &[u8]) -> Result<()>;
+
+    /// Awaits the next complete message from the peer.
+    ///
+    /// This method blocks until a message is available or the stream is closed.
+    ///
+    /// # Returns
+    /// - `Ok(Some(bytes))` - A complete message was received
+    /// - `Ok(None)` - The stream is closed (EOF)
+    /// - `Err(_)` - A transport error occurred
+    ///
+    /// # Invariants
+    /// - Messages are returned in order
+    /// - Each message is complete (no partial reads)
+    async fn recv(&self) -> Result<Option<Vec<u8>>>;
 }

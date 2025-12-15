@@ -6,7 +6,6 @@
 //! - **Panic Safety**: All decoding paths return `Result`, never panicking on unknown data.
 //! - **Forward Compatibility**: Unknown header fields are safely skipped.
 
-use crate::codec::encode_val;
 use crate::error::FailureReason;
 use crate::error::Result;
 use crate::error::Error;
@@ -14,19 +13,21 @@ use crate::error::Error;
 use neopack::Decoder;
 use neopack::Encoder;
 
-use wasmtime::component::Val;
-
 /// Encodes an outbound Call frame.
+///
+/// The `args_payload` is expected to be a pre-encoded neopack list of values,
+/// as produced by `crate::codec::encode_vals_to_bytes()`.
 pub struct CallEncoder<'a> {
     pub seq: u64,
     pub target: &'a str,
     pub method: &'a str,
-    pub args: &'a [Val],
+    /// Pre-encoded arguments list (including list headers).
+    pub args_payload: &'a [u8],
 }
 
 impl<'a> CallEncoder<'a> {
-    pub fn new(seq: u64, target: &'a str, method: &'a str, args: &'a [Val]) -> Self {
-        Self { seq, target, method, args }
+    pub fn new(seq: u64, target: &'a str, method: &'a str, args_payload: &'a [u8]) -> Self {
+        Self { seq, target, method, args_payload }
     }
 
     /// Encode this call into the encoder.
@@ -39,11 +40,7 @@ impl<'a> CallEncoder<'a> {
         write_map_str(enc, "method", self.method)?;
 
         enc.variant_begin("args")?;
-        enc.list_begin()?;
-        for val in self.args {
-            encode_val(enc, val)?;
-        }
-        enc.list_end()?;
+        enc.append_raw(self.args_payload)?;
         enc.variant_end()?;
 
         enc.map_end()?;
@@ -92,14 +89,18 @@ impl<'a> CallDecoder<'a> {
 }
 
 /// Encodes an outbound Reply frame (success).
+///
+/// The `results_payload` is expected to be a pre-encoded neopack list of values,
+/// as produced by `crate::codec::encode_vals_to_bytes()`.
 pub struct ReplyOkEncoder<'a> {
     pub seq: u64,
-    pub results: &'a [Val],
+    /// Pre-encoded results list (including list headers).
+    pub results_payload: &'a [u8],
 }
 
 impl<'a> ReplyOkEncoder<'a> {
-    pub fn new(seq: u64, results: &'a [Val]) -> Self {
-        Self { seq, results }
+    pub fn new(seq: u64, results_payload: &'a [u8]) -> Self {
+        Self { seq, results_payload }
     }
 
     /// Encode this success reply into the encoder.
@@ -111,11 +112,7 @@ impl<'a> ReplyOkEncoder<'a> {
         write_map_u64(enc, "seq", self.seq)?;
 
         enc.variant_begin("results")?;
-        enc.list_begin()?;
-        for val in self.results {
-            encode_val(enc, val)?;
-        }
-        enc.list_end()?;
+        enc.append_raw(self.results_payload)?;
         enc.variant_end()?;
 
         enc.map_end()?;
@@ -145,7 +142,7 @@ impl ReplyErrEncoder {
         write_map_u64(enc, "seq", self.seq)?;
 
         enc.variant_begin("reason")?;
-        encode_unit_variant(enc, self.reason.as_tag())?;
+        encode_failure_reason(enc, &self.reason)?;
         enc.variant_end()?;
 
         enc.map_end()?;
@@ -202,8 +199,7 @@ impl<'a> ReplyDecoder<'a> {
             match key {
                 "seq" => seq = Some(val.u64()?),
                 "reason" => {
-                    let tag = decode_unit_variant(&mut val)?;
-                    reason = Some(FailureReason::from_tag(tag)?);
+                    reason = Some(decode_failure_reason(&mut val)?);
                 }
                 _ => val.skip()?,
             }
@@ -288,4 +284,41 @@ fn decode_unit_variant<'a>(dec: &mut Decoder<'a>) -> Result<&'a str> {
     let (tag, mut body) = dec.variant()?;
     body.unit()?;
     Ok(tag)
+}
+
+/// Encode a FailureReason, including any payload for DomainSpecific.
+fn encode_failure_reason(enc: &mut Encoder, reason: &FailureReason) -> Result<()> {
+    match reason {
+        FailureReason::DomainSpecific(code, msg) => {
+            enc.variant_begin("Domain")?;
+            enc.list_begin()?;
+            enc.u32(*code)?;
+            enc.str(msg)?;
+            enc.list_end()?;
+            enc.variant_end()?;
+        }
+        _ => {
+            encode_unit_variant(enc, reason.as_tag())?;
+        }
+    }
+    Ok(())
+}
+
+/// Decode a FailureReason, including any payload for DomainSpecific.
+fn decode_failure_reason(dec: &mut Decoder) -> Result<FailureReason> {
+    let (tag, mut body) = dec.variant()?;
+    match tag {
+        "Domain" => {
+            let mut list_iter = body.list()?;
+            let mut code_dec = list_iter.next().ok_or(Error::ProtocolViolation("Missing code in Domain".into()))?;
+            let code = code_dec.u32()?;
+            let mut msg_dec = list_iter.next().ok_or(Error::ProtocolViolation("Missing msg in Domain".into()))?;
+            let msg = msg_dec.str()?.to_string();
+            Ok(FailureReason::DomainSpecific(code, msg))
+        }
+        _ => {
+            body.unit()?;
+            FailureReason::from_tag(tag)
+        }
+    }
 }
