@@ -16,3 +16,5 @@ We shouldn't have to treat WASI specially. Remove it. WASI is a perfectly valid 
 - for crates/exorun/src/mock_transport.rs, we can move this to tests.rs. I think a lot of the tests in tests.rs can be moved to either unit tests in individual files OR to integration tests in the exorun/tests folder.
 
 - runtime looks mostly good, but like remove instance ideally should e.g. kill the app if it's running or something. This is something to look into
+
+- There has to be a better way to implement bind_local_method

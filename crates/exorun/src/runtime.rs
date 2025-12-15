@@ -181,7 +181,27 @@ impl Runtime {
             .ok_or(Error::InstanceNotFound(id))
     }
 
-    /// Removes an instance from the registry.
+    /// Removes an instance from the registry and initiates cleanup.
+    ///
+    /// This removes the instance handle from the registry. The actual cleanup of
+    /// resources (WASI file handles, memory, etc.) happens when the last reference
+    /// to the InstanceHandle is dropped.
+    ///
+    /// # Important Notes
+    ///
+    /// - If other code holds clones of the InstanceHandle (via `get_instance`),
+    ///   cleanup will be delayed until all references are dropped.
+    /// - Any ongoing async operations on the instance will continue until they
+    ///   complete or the handle is dropped.
+    /// - WASI resources are automatically cleaned up by the Store's Drop implementation.
+    ///
+    /// # Future Considerations
+    ///
+    /// In the future, this could be enhanced to:
+    /// - Forcefully terminate any running operations
+    /// - Cancel pending RPC calls
+    /// - Immediately flush and close WASI file handles
+    /// - Send shutdown signals to linked instances
     pub fn remove_instance(&self, id: InstanceId) -> Result<()> {
         self.instances
             .remove(&id)

@@ -94,18 +94,18 @@ impl Client {
     /// Creates a new client and spawns the background pump task.
     pub fn new(transport: Arc<dyn Transport>) -> Self {
         let pending = Arc::new(DashMap::new());
-        
+
         // Spawn the pump task
         let pump_transport = transport.clone();
         let pump_pending = pending.clone();
-        
+
         tokio::spawn(async move {
             loop {
                 match pump_transport.recv().await {
                     Ok(Some(msg)) => {
                         if let Err(e) = Self::handle_message(&msg, &pump_pending) {
                             eprintln!("Error handling message in pump: {}", e);
-                            
+
                             // If there's exactly one pending request, send the specific error to it
                             // This handles cases like malformed frames or protocol violations in tests
                             if pump_pending.len() == 1 {
@@ -130,7 +130,7 @@ impl Client {
                     }
                 }
             }
-            
+
             // Pump died - notify all remaining pending requests
             let keys: Vec<u64> = pump_pending.iter().map(|e| *e.key()).collect();
             for key in keys {
@@ -141,33 +141,33 @@ impl Client {
                 }
             }
         });
-        
+
         Self {
             transport,
             pending,
             seq_gen: Arc::new(AtomicU64::new(1)),
         }
     }
-    
+
     /// Handle an incoming message from the transport.
     fn handle_message(msg: &[u8], pending: &DashMap<u64, PendingResponse>) -> Result<()> {
         let mut dec = Decoder::new(msg);
         let frame = RpcFrame::decode(&mut dec)?;
-        
+
         let RpcFrame::Reply(reply) = frame else {
             return Err(Error::NeoRpc(neorpc::Error::ProtocolViolation(
                 "Pump received Call frame instead of Reply".into(),
             )));
         };
-        
+
         let seq = reply.seq;
-        
+
         // Find and remove the pending request
         let Some((_, pending_resp)) = pending.remove(&seq) else {
             // No pending request for this sequence - might be a duplicate or very late response
             return Ok(());
         };
-        
+
         // Decode the result
         let result = match reply.status {
             Ok(val_decoder) => {
@@ -176,10 +176,10 @@ impl Client {
             }
             Err(reason) => Err(Error::Remote(reason)),
         };
-        
+
         // Send result to waiting caller (ignore if receiver dropped)
         let _ = pending_resp.tx.send(result);
-        
+
         Ok(())
     }
 
@@ -195,15 +195,15 @@ impl Client {
     ) -> (u64, oneshot::Receiver<Result<Vec<Val>>>) {
         let seq = self.seq_gen.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        
+
         self.pending.insert(seq, PendingResponse {
             result_types,
             tx,
         });
-        
+
         (seq, rx)
     }
-    
+
     /// Sends an encoded RPC frame and awaits the response.
     ///
     /// This is a lower-level method that allows the caller to encode the frame
@@ -219,7 +219,7 @@ impl Client {
             self.pending.remove(&seq);
             return Err(e.into());
         }
-        
+
         // Await response with timeout
         match tokio::time::timeout(Duration::from_secs(30), rx).await {
             Ok(Ok(result)) => result,
@@ -234,7 +234,7 @@ impl Client {
         }
     }
 
-    /// Makes an RPC call and returns the decoded result values.
+    // TODO: remove this method
     ///
     /// This method encodes the request, sends it, and awaits the response
     /// with a timeout. The response is correlated via sequence number.
@@ -246,15 +246,15 @@ impl Client {
         result_types: Vec<Type>,
     ) -> Result<Vec<Val>> {
         let (seq, rx) = self.prepare_call(result_types);
-        
+
         // Step 1: Encode arguments via codec (produces Vec<u8>)
         let args_bytes = neorpc::encode_vals_to_bytes(args)?;
-        
+
         // Step 2: Encode frame via framing (injects args_bytes)
         let mut enc = Encoder::new();
         CallEncoder::new(seq, target, method, &args_bytes).encode(&mut enc)?;
         let payload = enc.into_bytes()?;
-        
+
         self.send_and_await(seq, payload, rx).await
     }
 }

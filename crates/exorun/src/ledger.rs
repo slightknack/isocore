@@ -67,8 +67,9 @@ pub struct Ledger {
 impl Ledger {
     /// Introspects a Component to build a Ledger of its imports.
     ///
-    /// Returns an error if the component imports resources, futures, or streams.
-    /// WASI imports are excluded from validation as they are system components.
+    /// Only includes interfaces that are wire-safe (no resources, futures, or streams).
+    /// Interfaces that aren't wire-safe are silently skipped, as they may be system
+    /// components or local-only interfaces.
     pub fn from_component(component: &Component) -> Result<Self> {
         let engine = component.engine();
         let mut interfaces = HashMap::new();
@@ -76,12 +77,12 @@ impl Ledger {
         for (name, item) in component.component_type().imports(engine) {
             let ComponentItem::ComponentInstance(inst_ty) = item else { continue };
             
-            // Skip WASI interfaces - they're system components, not RPC targets
-            if name.starts_with("wasi:") {
-                continue;
-            }
+            // Try to extract the interface schema - skip if it's not wire-safe
+            let interface = match InterfaceSchema::from_inst_ty(engine, name, inst_ty) {
+                Ok(schema) => schema,
+                Err(_) => continue, // Not wire-safe, skip it
+            };
             
-            let interface = InterfaceSchema::from_inst_ty(engine, name, inst_ty)?;
             if interface.funcs.is_empty() { continue; }
             interfaces.insert(name.to_string(), interface);
         }
@@ -253,9 +254,10 @@ mod tests {
             )
         "#);
 
-        let err = Ledger::from_component(&c).unwrap_err();
-        assert!(format!("{err}").contains("not wire-safe"));
-        assert!(format!("{err}").contains("Resources cannot cross"));
+        let ledger = Ledger::from_component(&c).unwrap();
+        // Interface with resources should be skipped, not included in the ledger
+        assert!(ledger.interfaces.is_empty());
+        assert!(ledger.get_interface_func("bad", "use-resource").is_none());
     }
 
     #[test]
@@ -273,8 +275,10 @@ mod tests {
             )
         "#);
 
-        let err = Ledger::from_component(&c).unwrap_err();
-        assert!(format!("{err}").contains("not wire-safe"));
+        let ledger = Ledger::from_component(&c).unwrap();
+        // Interface with resources in results should be skipped
+        assert!(ledger.interfaces.is_empty());
+        assert!(ledger.get_interface_func("bad", "get-resource").is_none());
     }
 
     #[test]
@@ -292,8 +296,10 @@ mod tests {
             )
         "#);
 
-        let err = Ledger::from_component(&c).unwrap_err();
-        assert!(format!("{err}").contains("not wire-safe"));
+        let ledger = Ledger::from_component(&c).unwrap();
+        // Interface with nested resources should be skipped
+        assert!(ledger.interfaces.is_empty());
+        assert!(ledger.get_interface_func("bad", "process-list").is_none());
     }
 
     #[test]

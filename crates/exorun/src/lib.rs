@@ -9,7 +9,4 @@ pub mod system;
 pub mod transport;
 
 #[cfg(test)]
-mod mock_transport;
-
-#[cfg(test)]
 mod tests;

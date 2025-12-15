@@ -12,6 +12,7 @@ use neorpc::RpcFrame;
 use neorpc::decode_vals;
 use neorpc::encode_vals_to_bytes;
 use tokio::sync::Mutex;
+use tokio::sync::mpsc;
 use wasmtime::component::Type;
 use wasmtime::component::Val;
 
@@ -19,6 +20,41 @@ use crate::client;
 use crate::client::Client;
 use crate::transport;
 use crate::transport::Transport;
+
+/// A duplex channel transport using tokio mpsc channels.
+///
+/// This mock allows simulating bidirectional communication for testing.
+/// Messages sent via send() appear on the peer's recv() and vice versa.
+struct DuplexChannelTransport {
+    tx: mpsc::UnboundedSender<Vec<u8>>,
+    rx: Arc<Mutex<mpsc::UnboundedReceiver<Vec<u8>>>>,
+}
+
+impl DuplexChannelTransport {
+    fn new(
+        tx: mpsc::UnboundedSender<Vec<u8>>,
+        rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    ) -> Self {
+        Self {
+            tx,
+            rx: Arc::new(Mutex::new(rx)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Transport for DuplexChannelTransport {
+    async fn send(&self, payload: &[u8]) -> transport::Result<()> {
+        self.tx
+            .send(payload.to_vec())
+            .map_err(|_| transport::Error::ConnectionLost("Channel closed".into()))
+    }
+
+    async fn recv(&self) -> transport::Result<Option<Vec<u8>>> {
+        let mut rx = self.rx.lock().await;
+        Ok(rx.recv().await)
+    }
+}
 
 /// Mock transport that implements a ping->pong server.
 /// Expects a single string argument "ping" and returns "pong".
@@ -291,7 +327,6 @@ async fn test_remote_failure() {
 /// responses to requests even when responses arrive out of order.
 #[tokio::test]
 async fn test_concurrent_correlation() {
-    use crate::mock_transport::DuplexChannelTransport;
     use neopack::Encoder;
     use neorpc::encode_vals_to_bytes;
     use tokio::sync::mpsc;

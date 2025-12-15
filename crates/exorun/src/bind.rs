@@ -134,9 +134,10 @@ fn bind_method(
     let method_name_clone = method_name.to_string();
 
     linker_instance.func_new_async(method_name, move |_store, _func_ty, args, results| {
+        // TODO: move to proper location for imports
         use neopack::Encoder;
         use neorpc::CallEncoder;
-        
+
         let client = client.clone();
         let result_types = result_types.clone();
         let target_id = target_id.clone();
@@ -145,11 +146,11 @@ fn bind_method(
         Box::new(async move {
             // Prepare the call (increments seq and inserts pending)
             let (seq, rx) = client.prepare_call(result_types);
-            
+
             // Encode arguments directly without copying
             let args_bytes = neorpc::encode_vals_to_bytes(args)
                 .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
-            
+
             // Build the payload using CallEncoder
             let mut enc = Encoder::new();
             CallEncoder::new(seq, &target_id, &method_name, &args_bytes)
@@ -157,7 +158,7 @@ fn bind_method(
                 .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
             let payload = enc.into_bytes()
                 .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
-            
+
             // Send and await response
             let return_vals = client.send_and_await(seq, payload, rx)
                 .await
@@ -201,7 +202,7 @@ fn bind_local_method(
             // Lock the target instance and call the function
             let mut guard = target.inner.lock().await;
             let State { store, instance } = &mut *guard;
-            
+
             let func = instance
                 .get_func(&mut *store, &method_name)
                 .ok_or_else(|| wasmtime::Error::msg(format!("Method '{}' not found", method_name)))?;
