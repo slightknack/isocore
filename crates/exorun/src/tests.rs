@@ -282,11 +282,10 @@ async fn test_rpc_protocol_violation_call_frame() {
 
     let err = client.call("target", "method", &args, expected_types).await.unwrap_err();
 
+    // Protocol violations are now forwarded as the actual error
     match err {
-        client::Error::NeoRpc(e) => {
-            assert!(format!("{}", e).contains("Call frame"));
-        },
-        _ => panic!("Expected NeoRpc error, got {:?}", err),
+        client::Error::NeoRpc(neorpc::Error::ProtocolViolation(_)) => {},
+        _ => panic!("Expected NeoRpc(ProtocolViolation), got {:?}", err),
     }
 }
 
@@ -300,10 +299,10 @@ async fn test_rpc_malformed_frame() {
 
     let err = client.call("target", "method", &args, expected_types).await.unwrap_err();
 
+    // Malformed frames are now forwarded as the actual decoding error
     match err {
-        // Depending on whether neopack or neorpc catches it first
         client::Error::NeoRpc(_) | client::Error::NeoPack(_) => {},
-        _ => panic!("Expected framing error, got {:?}", err),
+        _ => panic!("Expected NeoRpc or NeoPack error, got {:?}", err),
     }
 }
 

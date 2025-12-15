@@ -47,6 +47,13 @@ impl<'a> CallEncoder<'a> {
         enc.variant_end()?;
         Ok(())
     }
+
+    /// Encode this call and return the bytes directly.
+    pub fn into_bytes(self) -> Result<Vec<u8>> {
+        let mut enc = Encoder::new();
+        self.encode(&mut enc)?;
+        enc.into_bytes().map_err(Error::from)
+    }
 }
 
 /// Decodes an inbound Call frame.
@@ -120,6 +127,13 @@ impl<'a> ReplyOkEncoder<'a> {
         enc.variant_end()?;
         Ok(())
     }
+
+    /// Encode this reply and return the bytes directly.
+    pub fn into_bytes(self) -> Result<Vec<u8>> {
+        let mut enc = Encoder::new();
+        self.encode(&mut enc)?;
+        enc.into_bytes().map_err(Error::from)
+    }
 }
 
 /// Encodes an outbound Reply frame (failure).
@@ -149,6 +163,13 @@ impl ReplyErrEncoder {
         enc.result_err_end()?;
         enc.variant_end()?;
         Ok(())
+    }
+
+    /// Encode this reply and return the bytes directly.
+    pub fn into_bytes(self) -> Result<Vec<u8>> {
+        let mut enc = Encoder::new();
+        self.encode(&mut enc)?;
+        enc.into_bytes().map_err(Error::from)
     }
 }
 

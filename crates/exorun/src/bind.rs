@@ -18,6 +18,8 @@ use wasmtime::component::LinkerInstance;
 use wasmtime::component::Type;
 use wasmtime::component::Val;
 
+use neorpc::CallEncoder;
+
 use crate::client::Client;
 use crate::context::ExorunCtx;
 use crate::instance::InstanceHandle;
@@ -134,10 +136,6 @@ fn bind_method(
     let method_name_clone = method_name.to_string();
 
     linker_instance.func_new_async(method_name, move |_store, _func_ty, args, results| {
-        // TODO: move to proper location for imports
-        use neopack::Encoder;
-        use neorpc::CallEncoder;
-
         let client = client.clone();
         let result_types = result_types.clone();
         let target_id = target_id.clone();
@@ -152,11 +150,8 @@ fn bind_method(
                 .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
 
             // Build the payload using CallEncoder
-            let mut enc = Encoder::new();
-            CallEncoder::new(seq, &target_id, &method_name, &args_bytes)
-                .encode(&mut enc)
-                .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
-            let payload = enc.into_bytes()
+            let payload = CallEncoder::new(seq, &target_id, &method_name, &args_bytes)
+                .into_bytes()
                 .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
 
             // Send and await response

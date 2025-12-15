@@ -24,7 +24,7 @@ use wasmtime::component::Val;
 use crate::transport::Transport;
 use crate::transport;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Error {
     Transport(transport::Error),
     NeoRpc(neorpc::Error),
@@ -100,52 +100,43 @@ impl Client {
         let pump_pending = pending.clone();
 
         tokio::spawn(async move {
-            loop {
+            let error = loop {
                 match pump_transport.recv().await {
                     Ok(Some(msg)) => {
                         if let Err(e) = Self::handle_message(&msg, &pump_pending) {
                             eprintln!("Error handling message in pump: {}", e);
-
-                            // If there's exactly one pending request, send the specific error to it
-                            // This handles cases like malformed frames or protocol violations in tests
-                            if pump_pending.len() == 1 {
-                                let keys: Vec<u64> = pump_pending.iter().map(|e| *e.key()).collect();
-                                if let Some(key) = keys.first() {
-                                    if let Some((_, pending_resp)) = pump_pending.remove(key) {
-                                        let _ = pending_resp.tx.send(Err(e));
-                                    }
-                                }
-                            }
-                            // Protocol errors are fatal - terminate pump
-                            break;
+                            break e;
                         }
                     }
                     Ok(None) => {
                         // Stream closed
-                        break;
+                        break Error::Transport(transport::Error::ConnectionLost("Stream closed".into()));
                     }
                     Err(e) => {
                         eprintln!("Transport error in pump: {}", e);
-                        break;
+                        break Error::Transport(e);
                     }
                 }
-            }
-
-            // Pump died - notify all remaining pending requests
-            let keys: Vec<u64> = pump_pending.iter().map(|e| *e.key()).collect();
-            for key in keys {
-                if let Some((_, pending_resp)) = pump_pending.remove(&key) {
-                    let _ = pending_resp.tx.send(Err(Error::Transport(
-                        transport::Error::ConnectionLost("Pump terminated".into())
-                    )));
-                }
-            }
+            };
+            
+            // Notify all pending requests with the error
+            Self::notify_all_pending(&pump_pending, error);
         });
 
         Self {
             transport,
             pending,
             seq_gen: Arc::new(AtomicU64::new(1)),
+        }
+    }
+
+    /// Notify all pending requests with the given error.
+    fn notify_all_pending(pending: &DashMap<u64, PendingResponse>, error: Error) {
+        let keys: Vec<u64> = pending.iter().map(|e| *e.key()).collect();
+        for key in keys {
+            if let Some((_, pending_resp)) = pending.remove(&key) {
+                let _ = pending_resp.tx.send(Err(error.clone()));
+            }
         }
     }
 
