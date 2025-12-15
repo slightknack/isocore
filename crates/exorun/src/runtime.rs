@@ -1,10 +1,10 @@
 //! # Runtime Registry
 //!
-//! Central registry for the application lifecycle. Manages compiled components (Apps),
-//! connection protocols (Peers), and active executions (Instances).
+//! Central registry for the application lifecycle. Manages compiled components (Apps)
+//! and active executions (Instances).
 //!
 //! Uses DashMap for concurrent access without global locking, enabling high-throughput
-//! scenarios where multiple tasks register apps, add peers, or spawn instances simultaneously.
+//! scenarios where multiple tasks register apps or spawn instances simultaneously.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -14,8 +14,8 @@ use dashmap::DashMap;
 use wasmtime::Engine;
 use wasmtime::component::Component;
 
+use crate::peer::Peer;
 use crate::instance::InstanceHandle;
-use crate::transport::Transport;
 
 /// Strong type for application identifiers.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
@@ -28,6 +28,8 @@ impl std::fmt::Display for AppId {
 }
 
 /// Strong type for peer identifiers.
+/// Represents a stable logical identity for a remote peer, independent of
+/// network address or transport protocol.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct PeerId(pub u64);
 
@@ -76,12 +78,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 ///
 /// Provides concurrent registration and lookup for:
 /// - Apps: Compiled Wasm components ready for instantiation
-/// - Peers: Network transports for remote communication
+/// - Peers: Remote connections identified by logical PeerId
 /// - Instances: Running component instances
 pub struct Runtime {
     pub(crate) engine: Engine,
     pub(crate) apps: DashMap<AppId, Component>,
-    pub(crate) peers: DashMap<PeerId, Arc<dyn Transport>>,
+    pub(crate) peers: DashMap<PeerId, Arc<Peer>>,
     pub(crate) instances: DashMap<InstanceId, InstanceHandle>,
     next_app_id: AtomicU64,
     next_peer_id: AtomicU64,
@@ -143,13 +145,6 @@ impl Runtime {
         id
     }
 
-    /// Adds a peer transport and returns its unique ID.
-    pub fn add_peer(&self, transport: Arc<dyn Transport>) -> PeerId {
-        let id = PeerId(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
-        self.peers.insert(id, transport);
-        id
-    }
-
     /// Registers an instance handle and returns its unique ID.
     pub(crate) fn register_instance(&self, handle: InstanceHandle) -> InstanceId {
         let id = InstanceId(self.next_instance_id.fetch_add(1, Ordering::Relaxed));
@@ -165,12 +160,21 @@ impl Runtime {
             .ok_or(Error::AppNotFound(id))
     }
 
-    /// Retrieves a peer transport by ID.
-    pub fn get_peer(&self, id: PeerId) -> Result<Arc<dyn Transport>> {
+    /// Registers a peer with the runtime and returns its unique ID.
+    /// The peer name is stored in the Peer for logging and diagnostics.
+    pub fn add_peer(&self, peer: Arc<Peer>) -> PeerId {
+        let id = PeerId(self.next_peer_id.fetch_add(1, Ordering::Relaxed));
+        self.peers.insert(id, peer);
+        id
+    }
+
+    /// Retrieves the peer handle for a given peer ID.
+    /// Returns an error if the peer is not registered.
+    pub fn get_peer(&self, peer_id: &PeerId) -> Result<Arc<Peer>> {
         self.peers
-            .get(&id)
-            .map(|entry| entry.value().clone())
-            .ok_or(Error::PeerNotFound(id))
+            .get(peer_id)
+            .map(|entry| Arc::clone(entry.value()))
+            .ok_or(Error::PeerNotFound(*peer_id))
     }
 
     /// Retrieves an instance handle by ID.

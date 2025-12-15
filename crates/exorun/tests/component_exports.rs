@@ -91,8 +91,10 @@ async fn test_low_level_component_export_navigation() {
     logger.install(&mut linker).expect("Failed to install logger");
     WasiSystem::new().install(&mut linker).expect("Failed to install WASI");
 
-    // Create store
-    let mut store = wasmtime::Store::new(rt.engine(), ExorunCtx::new());
+    // Create store with runtime context
+    let rt = std::sync::Arc::new(rt);
+    let ctx = exorun::context::ContextBuilder::new().build(std::sync::Arc::clone(&rt));
+    let mut store = wasmtime::Store::new(rt.engine(), ctx);
 
     // Instantiate the component
     let instance = linker

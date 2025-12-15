@@ -2,6 +2,8 @@
 //!
 //! Provides a fluent API for composing an instance with various linking strategies.
 
+use std::sync::Arc;
+
 use wasmtime::component::Linker;
 use wasmtime::Store;
 
@@ -64,15 +66,15 @@ pub enum Linkable {
 }
 
 /// Fluent builder for creating instances with configured links.
-pub struct InstanceBuilder<'a> {
-    runtime: &'a Runtime,
+pub struct InstanceBuilder {
+    runtime: Arc<Runtime>,
     app_id: AppId,
     links: Vec<Linkable>,
     context_builder: ContextBuilder,
 }
 
-impl<'a> InstanceBuilder<'a> {
-    pub fn new(runtime: &'a Runtime, app_id: AppId) -> Self {
+impl InstanceBuilder {
+    pub fn new(runtime: Arc<Runtime>, app_id: AppId) -> Self {
         Self {
             runtime,
             app_id,
@@ -114,23 +116,23 @@ impl<'a> InstanceBuilder<'a> {
 
         let mut linker = Linker::new(self.runtime.engine());
 
-        // Process links
-        for link in &self.links {
+        // Process links (consuming them to transfer ownership)
+        for link in self.links {
             match link {
                 Linkable::System(system) => {
                     system.install(&mut linker)?;
                     system.configure(&mut self.context_builder)?;
                 }
                 Linkable::Local { interface, target } => {
-                    Binder::link_local_interface(&mut linker, &ledger, interface, target.clone())?;
+                    Binder::link_local_interface(&mut linker, &ledger, &interface, target.clone())?;
                 }
                 Linkable::Remote { interface, target } => {
-                    Binder::link_remote_interface(&mut linker, &ledger, interface, target.clone())?;
+                    Binder::link_remote_interface(&mut linker, &ledger, &interface, target)?;
                 }
             }
         }
 
-        let ctx = self.context_builder.build();
+        let ctx = self.context_builder.build(Arc::clone(&self.runtime));
         let mut store = Store::new(self.runtime.engine(), ctx);
 
         let instance = linker

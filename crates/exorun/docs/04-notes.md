@@ -1,3 +1,8 @@
+---
+origin: handwritten
+date: 2025-12-14
+---
+
 Some feedback: 
 
 - In bind.rs, I notice that we use to_vec to copy the vals. This is inefficient. What we should do is encode the vals, and then in the closure, get the sequence number, build the payload, e.g. Call should take a CallEncoder. If you want to make a method on client that increments seq and inserts pending, that would be great.

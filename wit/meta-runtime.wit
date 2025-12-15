@@ -1,0 +1,273 @@
+/// Meta Runtime Management Interface
+///
+/// This interface enables Wasm components to act as orchestrators and supervisors,
+/// managing other apps, instances, and peers dynamically at runtime.
+///
+/// Inspired by Erlang/OTP's supervision trees, this allows applications to:
+/// - Load new modules dynamically
+/// - Spawn and manage worker instances
+/// - Connect to remote peers
+/// - Rewire links in response to failures or topology changes
+///
+/// # Usage Example
+///
+/// A supervisor component could use this interface to:
+/// ```wit
+/// // Load a worker app
+/// let app-id = register-app(worker-bytes);
+///
+/// // Connect to a remote peer
+/// add-peer("worker-node-1", ["tcp://10.0.0.5:8080"]);
+///
+/// // Spawn instances linking to the peer
+/// let config = instance-config {
+///     links: [
+///         link {
+///             interface: "my:service/storage",
+///             peer: "worker-node-1",
+///             target: "storage-instance"
+///         }
+///     ]
+/// };
+/// let instance = spawn-instance(app-id, config);
+/// ```
+///
+/// # Security Considerations
+///
+/// This is a highly privileged interface. Applications with access to this
+/// interface can:
+/// - Execute arbitrary Wasm code via register-app
+/// - Consume system resources via spawn-instance
+/// - Establish network connections via add-peer
+///
+/// Only grant this interface to trusted supervisor/orchestrator components.
+
+package meta:runtime;
+
+/// Represents an application (compiled Wasm component)
+type app-id = u64;
+
+/// Represents a running instance
+type instance-id = u64;
+
+/// Represents a logical peer identity
+/// This is stable across reconnections and address changes
+/// The peer name is stored in the Client for diagnostics
+type peer-id = u64;
+
+/// Configuration for spawning a new instance
+record instance-config {
+    /// Links to configure for this instance
+    /// Each link connects an imported interface to either a local instance
+    /// or a remote peer
+    links: list<link-config>,
+
+    /// Environment variables to set for this instance
+    env: list<tuple<string, string>>,
+
+    /// Whether to inherit stdio from the parent
+    inherit-stdio: bool,
+}
+
+/// Configuration for a single interface link
+variant link-config {
+    /// Link to a local instance in the same runtime
+    local(local-link),
+
+    /// Link to a remote peer over the network
+    remote(remote-link),
+}
+
+record local-link {
+    /// The interface name to link (e.g., "my:service/storage")
+    interface: string,
+
+    /// The local instance to link to
+    target-instance: instance-id,
+}
+
+record remote-link {
+    /// The interface name to link (e.g., "my:service/storage")
+    interface: string,
+
+    /// The peer to connect to
+    peer: peer-id,
+
+    /// The target instance ID on the remote peer
+    target: string,
+}
+
+/// Information about a registered peer
+record peer-info {
+    /// Logical peer identifier
+    id: peer-id,
+
+    /// Current connection status
+    status: peer-status,
+
+    /// Known addresses for this peer
+    addresses: list<string>,
+}
+
+/// Peer connection status
+enum peer-status {
+    /// Peer is connected and healthy
+    connected,
+
+    /// Peer is disconnected, attempting reconnection
+    reconnecting,
+
+    /// Peer is down
+    down,
+}
+
+/// Error types for runtime operations
+variant runtime-error {
+    /// App not found
+    app-not-found(app-id),
+
+    /// Instance not found
+    instance-not-found(instance-id),
+
+    /// Peer not found
+    peer-not-found(peer-id),
+
+    /// Invalid component bytes
+    invalid-component(string),
+
+    /// Instantiation failed
+    instantiation-failed(string),
+
+    /// Link configuration error
+    link-error(string),
+}
+
+interface manager {
+    /// Register a new application from component bytes.
+    ///
+    /// The bytes must be a valid WebAssembly component. This compiles
+    /// the component and stores it in the runtime registry.
+    ///
+    /// # Returns
+    /// - Ok(app-id): The unique identifier for the registered app
+    /// - Err: If the bytes are not a valid component
+    ///
+    /// # Example
+    /// ```
+    /// let bytes = read-file("worker.wasm");
+    /// let app-id = register-app(bytes)?;
+    /// ```
+    register-app: func(bytes: list<u8>) -> result<app-id, runtime-error>;
+
+    /// Spawn a new instance from a registered app.
+    ///
+    /// Creates a new instance of the given app with the specified configuration.
+    /// The instance is started immediately.
+    ///
+    /// # Returns
+    /// - Ok(instance-id): The unique identifier for the spawned instance
+    /// - Err: If the app doesn't exist or instantiation fails
+    ///
+    /// # Example
+    /// ```
+    /// let config = instance-config {
+    ///     links: [],
+    ///     env: [("LOG_LEVEL", "debug")],
+    ///     inherit-stdio: true
+    /// };
+    /// let instance = spawn-instance(app-id, config)?;
+    /// ```
+    spawn-instance: func(
+        app: app-id,
+        config: instance-config
+    ) -> result<instance-id, runtime-error>;
+
+    /// Terminate a running instance.
+    ///
+    /// Stops the instance and releases its resources. Any ongoing operations
+    /// are interrupted.
+    ///
+    /// # Returns
+    /// - Ok: Instance was terminated successfully
+    /// - Err: If the instance doesn't exist
+    terminate-instance: func(instance: instance-id) -> result<_, runtime-error>;
+
+    /// Connect to a remote peer.
+    ///
+    /// Registers a logical peer identity and provides addresses to connect to.
+    /// The runtime will attempt to establish and maintain a connection to the peer,
+    /// automatically reconnecting if the connection is lost.
+    ///
+    /// # Parameters
+    /// - peer-id: Logical identifier for the peer (stable across reconnections)
+    /// - addresses: List of addresses to try (e.g., ["tcp://host:port", "quic://host:port"])
+    ///
+    /// # Returns
+    /// - Ok: Peer was registered and connection initiated
+    /// - Err: If registration fails
+    ///
+    /// # Example
+    /// ```
+    /// add-peer("db-primary", ["tcp://10.0.0.5:8080", "tcp://10.0.0.6:8080"])?;
+    /// ```
+    ///
+    /// # Note
+    /// This is a simplified version. In a full implementation, this would return
+    /// a handle or use a connector trait for flexible connection strategies.
+    add-peer: func(peer: peer-id, addresses: list<string>) -> result<_, runtime-error>;
+
+    /// Remove a peer from the runtime.
+    ///
+    /// Disconnects from the peer and removes it from the registry.
+    /// Instances linked to this peer will experience connection errors.
+    ///
+    /// # Returns
+    /// - Ok: Peer was removed successfully
+    /// - Err: If the peer doesn't exist
+    remove-peer: func(peer: peer-id) -> result<_, runtime-error>;
+
+    /// List all registered applications.
+    ///
+    /// Returns the app IDs of all apps currently registered in the runtime.
+    ///
+    /// # Example
+    /// ```
+    /// for app in list-apps() {
+    ///     log("Registered app: {app}");
+    /// }
+    /// ```
+    list-apps: func() -> list<app-id>;
+
+    /// List all running instances.
+    ///
+    /// Returns the instance IDs of all instances currently running.
+    ///
+    /// # Example
+    /// ```
+    /// for instance in list-instances() {
+    ///     log("Running instance: {instance}");
+    /// }
+    /// ```
+    list-instances: func() -> list<instance-id>;
+
+    /// List all registered peers.
+    ///
+    /// Returns information about all peers, including connection status.
+    ///
+    /// # Example
+    /// ```
+    /// for peer in list-peers() {
+    ///     log("Peer {peer.id}: {peer.status}");
+    /// }
+    /// ```
+    list-peers: func() -> list<peer-info>;
+}
+
+/// World for supervisor/orchestrator components that manage the runtime
+world supervisor {
+    /// Import the runtime management interface
+    import manager;
+
+    /// Standard WASI imports for file I/O, etc.
+    /// (In real implementation, you'd import specific WASI interfaces)
+}

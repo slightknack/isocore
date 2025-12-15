@@ -16,8 +16,8 @@ use tokio::sync::mpsc;
 use wasmtime::component::Type;
 use wasmtime::component::Val;
 
-use crate::client;
-use crate::client::Client;
+use crate::peer;
+use crate::peer::Peer;
 use crate::transport;
 use crate::transport::Transport;
 
@@ -238,14 +238,14 @@ impl Transport for MalformedTransport {
 
 #[tokio::test]
 async fn test_successful_ping_pong() {
-    let transport = Arc::new(PingPongTransport::new());
-    let client = Client::new(transport);
+    let transport = Box::new(PingPongTransport::new());
+    let peer = Peer::new("test-peer", transport);
 
     let args = vec![Val::String("ping".into())];
     let expected_types = vec![Type::String];
 
     // We expect 1 return value: "pong"
-    let results = client.call("target", "method", &args, expected_types)
+    let results = peer.call("target", "method", &args, expected_types)
         .await
         .expect("Call failed");
 
@@ -258,66 +258,66 @@ async fn test_successful_ping_pong() {
 
 #[tokio::test]
 async fn test_transport_error() {
-    let transport = Arc::new(TimeoutTransport);
-    let client = Client::new(transport);
+    let transport = Box::new(TimeoutTransport);
+    let peer = Peer::new("test-peer", transport);
 
     let args = vec![Val::U32(42)];
     let expected_types = vec![Type::U32];
 
-    let err = client.call("target", "method", &args, expected_types).await.unwrap_err();
+    let err = peer.call("target", "method", &args, expected_types).await.unwrap_err();
 
     match err {
-        client::Error::Transport(transport::Error::Timeout) => {},
+        peer::Error::Transport(transport::Error::Timeout) => {},
         _ => panic!("Expected Transport(Timeout), got {:?}", err),
     }
 }
 
 #[tokio::test]
 async fn test_rpc_protocol_violation_call_frame() {
-    let transport = Arc::new(CallReturningTransport::new());
-    let client = Client::new(transport);
+    let transport = Box::new(CallReturningTransport::new());
+    let peer = Peer::new("test-peer", transport);
 
     let args = vec![Val::U32(42)];
     let expected_types = vec![Type::U32];
 
-    let err = client.call("target", "method", &args, expected_types).await.unwrap_err();
+    let err = peer.call("target", "method", &args, expected_types).await.unwrap_err();
 
     // Protocol violations are now forwarded as the actual error
     match err {
-        client::Error::NeoRpc(neorpc::Error::ProtocolViolation(_)) => {},
+        peer::Error::NeoRpc(neorpc::Error::ProtocolViolation(_)) => {},
         _ => panic!("Expected NeoRpc(ProtocolViolation), got {:?}", err),
     }
 }
 
 #[tokio::test]
 async fn test_rpc_malformed_frame() {
-    let transport = Arc::new(MalformedTransport::new());
-    let client = Client::new(transport);
+    let transport = Box::new(MalformedTransport::new());
+    let peer = Peer::new("test-peer", transport);
 
     let args = vec![Val::U32(42)];
     let expected_types = vec![Type::U32];
 
-    let err = client.call("target", "method", &args, expected_types).await.unwrap_err();
+    let err = peer.call("target", "method", &args, expected_types).await.unwrap_err();
 
     // Malformed frames are now forwarded as the actual decoding error
     match err {
-        client::Error::NeoRpc(_) | client::Error::NeoPack(_) => {},
+        peer::Error::NeoRpc(_) | peer::Error::NeoPack(_) => {},
         _ => panic!("Expected NeoRpc or NeoPack error, got {:?}", err),
     }
 }
 
 #[tokio::test]
 async fn test_remote_failure() {
-    let transport = Arc::new(FailureTransport::new());
-    let client = Client::new(transport);
+    let transport = Box::new(FailureTransport::new());
+    let peer = Peer::new("test-peer", transport);
 
     let args = vec![Val::U32(42)];
     let expected_types = vec![Type::U32];
 
-    let err = client.call("target", "method", &args, expected_types).await.unwrap_err();
+    let err = peer.call("target", "method", &args, expected_types).await.unwrap_err();
 
     match err {
-        client::Error::Remote(FailureReason::AppTrapped) => {},
+        peer::Error::Remote(FailureReason::AppTrapped) => {},
         _ => panic!("Expected Remote(AppTrapped), got {:?}", err),
     }
 }
@@ -334,20 +334,22 @@ async fn test_concurrent_correlation() {
     let (client_tx, mut server_rx) = mpsc::unbounded_channel();
     let (server_tx, client_rx) = mpsc::unbounded_channel();
     
-    let client_transport = Arc::new(DuplexChannelTransport::new(client_tx, client_rx));
-    let client = Client::new(client_transport);
+    let client_transport = Box::new(DuplexChannelTransport::new(client_tx, client_rx));
+    let peer = Arc::new(Peer::new("test-peer", client_transport));
     
-    // Spawn 10 concurrent client tasks
+    // Spawn 10 concurrent peer tasks
     let mut tasks = Vec::new();
     for i in 0..10 {
-        let client = client.clone();
+        let peer = peer.clone();
         let task = tokio::spawn(async move {
             let args = vec![Val::U32(i)];
             let result_types = vec![Type::U32];
-            let results = client.call("target", "method", &args, result_types).await.unwrap();
+            let results = peer.call("target", "method", &args, result_types).await.unwrap();
             
             // Verify we got the right response
-            assert_eq!(results.len(), 1);
+            let expected = 1;
+            let actual = results.len();
+            assert_eq!(expected, actual);
             match &results[0] {
                 Val::U32(v) => assert_eq!(*v, i * 2), // Server doubles the input
                 _ => panic!("Expected U32"),
@@ -443,17 +445,17 @@ async fn test_failure_fidelity() {
         }
     }
     
-    let transport = Arc::new(DomainErrorTransport::new());
-    let client = Client::new(transport);
+    let transport = Box::new(DomainErrorTransport::new());
+    let peer = Peer::new("test-peer", transport);
     
     let args = vec![Val::U32(1)];
     let result_types = vec![Type::U32];
     
-    let err = client.call("target", "method", &args, result_types).await.unwrap_err();
+    let err = peer.call("target", "method", &args, result_types).await.unwrap_err();
     
     // Verify the error is exactly what we sent
     match err {
-        client::Error::Remote(FailureReason::DomainSpecific(code, msg)) => {
+        peer::Error::Remote(FailureReason::DomainSpecific(code, msg)) => {
             assert_eq!(code, 42);
             assert_eq!(msg, "Auth failed");
         }

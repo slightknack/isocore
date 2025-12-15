@@ -8,8 +8,9 @@ use wasmtime::component::Linker;
 
 use exorun::bind::RemoteTarget;
 use exorun::builder::InstanceBuilder;
+use exorun::peer::Peer;
 use exorun::context::ExorunCtx;
-use exorun::instance::Error;
+use exorun::runtime;
 use exorun::runtime::Runtime;
 use exorun::system::SystemComponent;
 use exorun::system::WasiSystem;
@@ -54,8 +55,10 @@ impl Transport for MockTransport {
 
 #[tokio::test]
 async fn test_peer_registration() {
-    let rt = Runtime::new().expect("Failed to create runtime");
-    let _peer_id = rt.add_peer(Arc::new(MockTransport));
+    let runtime = Arc::new(Runtime::new().expect("Failed to create runtime"));
+    let transport = Box::new(MockTransport);
+    let peer = Arc::new(Peer::new("test-peer", transport));
+    let _peer_id = runtime.add_peer(peer);
 }
 
 // --- Test 4: System Integration (Logger) ---
@@ -109,7 +112,7 @@ impl SystemComponent for SysLogger {
 
 #[tokio::test]
 async fn test_system_integration() {
-    let rt = Runtime::new().expect("Failed to create runtime");
+    let rt = Arc::new(Runtime::new().expect("Failed to create runtime"));
     let logger_sys = SysLogger::new();
 
     let app_id = rt
@@ -118,7 +121,7 @@ async fn test_system_integration() {
     
     let component = rt.get_app(app_id).expect("Failed to get component");
 
-    let instance = InstanceBuilder::new(&rt, app_id)
+    let instance = InstanceBuilder::new(Arc::clone(&rt), app_id)
         .link_system(Box::new(WasiSystem::new()))
         .link_system(Box::new(logger_sys.clone()))
         .instantiate()
@@ -156,7 +159,7 @@ async fn test_system_integration() {
 
 #[tokio::test]
 async fn test_app_to_app_local() {
-    let rt = Runtime::new().expect("Failed to create runtime");
+    let rt = Arc::new(Runtime::new().expect("Failed to create runtime"));
 
     let provider_id = rt
         .register_app(&wasm("app_provider"))
@@ -165,13 +168,13 @@ async fn test_app_to_app_local() {
         .register_app(&wasm("app_consumer"))
         .expect("Failed to register consumer");
 
-    let provider_inst = InstanceBuilder::new(&rt, provider_id)
+    let provider_inst = InstanceBuilder::new(Arc::clone(&rt), provider_id)
         .link_system(Box::new(WasiSystem::new()))
         .instantiate()
         .await
         .expect("Failed to instantiate provider");
 
-    let consumer_inst = InstanceBuilder::new(&rt, consumer_id)
+    let consumer_inst = InstanceBuilder::new(Arc::clone(&rt), consumer_id)
         .link_system(Box::new(WasiSystem::new()))
         .link_local("test:demo/math", provider_inst)
         .instantiate()
@@ -251,14 +254,14 @@ impl SystemComponent for InMemoryKv {
 
 #[tokio::test]
 async fn test_stateful_system() {
-    let rt = Runtime::new().expect("Failed to create runtime");
+    let rt = Arc::new(Runtime::new().expect("Failed to create runtime"));
     let kv_sys = InMemoryKv::new();
 
     let app_id = rt
         .register_app(&wasm("app_kv"))
         .expect("Failed to register app");
 
-    let instance = InstanceBuilder::new(&rt, app_id)
+    let instance = InstanceBuilder::new(Arc::clone(&rt), app_id)
         .link_system(Box::new(WasiSystem::new()))
         .link_system(Box::new(kv_sys.clone()))
         .instantiate()
@@ -280,19 +283,22 @@ async fn test_stateful_system() {
 
 #[tokio::test]
 async fn test_remote_peer_mock() {
-    let rt = Runtime::new().expect("Failed to create runtime");
+    let rt = Arc::new(Runtime::new().expect("Failed to create runtime"));
 
-    let peer_transport = Arc::new(MockTransport);
+    let transport = Box::new(MockTransport);
+    let peer = Arc::new(Peer::new("math-service", transport));
+    let peer_id = rt.add_peer(peer);
+    
     let app_id = rt
         .register_app(&wasm("app_consumer"))
         .expect("Failed to register app");
 
-    let instance = InstanceBuilder::new(&rt, app_id)
+    let instance = InstanceBuilder::new(Arc::clone(&rt), app_id)
         .link_system(Box::new(WasiSystem::new()))
         .link_remote(
             "test:demo/math",
             RemoteTarget {
-                transport: peer_transport,
+                peer_id,
                 target_id: "math-service-on-mars".into(),
             },
         )
@@ -315,21 +321,21 @@ async fn test_remote_peer_mock() {
 
 #[tokio::test]
 async fn test_diamond_dependency() {
-    let rt = Runtime::new().expect("Failed to create runtime");
+    let rt = Arc::new(Runtime::new().expect("Failed to create runtime"));
     let shared_kv = InMemoryKv::new();
 
     let app_id = rt
         .register_app(&wasm("app_kv"))
         .expect("Failed to register app");
 
-    let inst_a = InstanceBuilder::new(&rt, app_id)
+    let inst_a = InstanceBuilder::new(Arc::clone(&rt), app_id)
         .link_system(Box::new(WasiSystem::new()))
         .link_system(Box::new(shared_kv.clone()))
         .instantiate()
         .await
         .expect("Failed to instantiate instance A");
 
-    let inst_b = InstanceBuilder::new(&rt, app_id)
+    let inst_b = InstanceBuilder::new(Arc::clone(&rt), app_id)
         .link_system(Box::new(WasiSystem::new()))
         .link_system(Box::new(shared_kv.clone()))
         .instantiate()

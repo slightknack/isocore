@@ -1,6 +1,6 @@
 pub mod bind;
 pub mod builder;
-pub mod client;
+pub mod peer;
 pub mod context;
 pub mod instance;
 pub mod ledger;

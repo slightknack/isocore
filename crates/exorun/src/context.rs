@@ -1,13 +1,14 @@
 //! Store context for running component instances.
 
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::WasiCtx;
 use wasmtime_wasi::WasiCtxBuilder;
 use wasmtime_wasi::WasiCtxView;
 use wasmtime_wasi::WasiView;
+
+use crate::runtime::Runtime;
 
 /// Builder for constructing an ExorunCtx.
 ///
@@ -45,12 +46,12 @@ impl ContextBuilder {
         self.user_data.insert(data);
     }
 
-    pub fn build(mut self) -> ExorunCtx {
+    pub fn build(mut self, runtime: Arc<Runtime>) -> ExorunCtx {
         ExorunCtx {
-            seq: AtomicU64::new(1),
             wasi: self.wasi.build(),
             table: ResourceTable::new(),
             user_data: self.user_data,
+            runtime,
         }
     }
 }
@@ -64,46 +65,21 @@ impl Default for ContextBuilder {
 /// Per-instance execution context stored in Wasmtime's Store.
 ///
 /// Holds mutable state scoped to a single component instance. Provides:
-/// - RPC sequence numbering for correlation
 /// - WASI capabilities (filesystem, environment, stdio)
 /// - Resource table for WASI resource management
 /// - Type-safe user data injection via AnyMap
-///
-/// # Thread Safety
-///
-/// Wasmtime's Store is !Send + !Sync, providing single-threaded access.
-/// Interior mutability via AtomicU64 allows incrementing the sequence counter
-/// without requiring &mut self.
+/// - Reference to the global Runtime for peer resolution and meta operations
 pub struct ExorunCtx {
-    seq: AtomicU64,
     pub(crate) wasi: WasiCtx,
     pub(crate) table: ResourceTable,
     pub(crate) user_data: anymap::Map<dyn anymap::any::Any + Send + Sync>,
+    pub(crate) runtime: Arc<Runtime>,
 }
 
 impl ExorunCtx {
-    /// Creates a new context with default WASI capabilities.
-    pub fn new() -> Self {
-        ContextBuilder::new().build()
-    }
-
-    /// Generates the next sequence number for outbound RPC calls.
-    ///
-    /// Increments atomically using relaxed ordering (sufficient since Store
-    /// access is single-threaded).
-    pub(crate) fn next_seq(&self) -> u64 {
-        self.seq.fetch_add(1, Ordering::Relaxed)
-    }
-
     /// Retrieves user data by type.
     pub fn get<T: anymap::any::Any + Send + Sync>(&self) -> Option<&T> {
         self.user_data.get::<T>()
-    }
-}
-
-impl Default for ExorunCtx {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

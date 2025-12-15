@@ -7,9 +7,9 @@
 //! ## Architecture
 //!
 //! - **Binder**: The entry point for linking.
-//! - **Closure Factory**: A higher-order mechanism that captures the `Transport`
+//! - **Closure Factory**: A higher-order mechanism that captures the `Client`
 //!   and `target_id`, returning a `Fn` that Wasmtime can execute.
-//! - **Sequence Generation**: Uses per-instance sequence counter from `ExorunCtx` for RPC correlation.
+//! - **Sequence Generation**: Uses Client-owned sequence counter for RPC correlation.
 
 use std::sync::Arc;
 
@@ -20,12 +20,11 @@ use wasmtime::component::Val;
 
 use neorpc::CallEncoder;
 
-use crate::client::Client;
 use crate::context::ExorunCtx;
 use crate::instance::InstanceHandle;
 use crate::instance::State;
 use crate::ledger::Ledger;
-use crate::transport::Transport;
+use crate::runtime::PeerId;
 
 #[derive(Debug)]
 pub enum Error {
@@ -49,9 +48,10 @@ impl std::error::Error for Error {}
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// A handle to the resources needed to bind a remote target.
-#[derive(Clone)]
+/// Uses a logical PeerId that will be resolved to a Peer at call time
+/// via the Runtime in ExorunCtx.
 pub struct RemoteTarget {
-    pub transport: Arc<dyn Transport>,
+    pub peer_id: PeerId,
     pub target_id: String,
 }
 
@@ -62,7 +62,8 @@ impl Binder {
     /// Links a specific interface instance (e.g., `my:kv/store`) to a remote target.
     ///
     /// This will iterate over all functions defined in the Ledger for this interface
-    /// and generate a stub for each one.
+    /// and generate a stub for each one. The actual Client is resolved at call time
+    /// from the Runtime via the peer_id, enabling reconnection support.
     pub fn link_remote_interface(
         linker: &mut Linker<ExorunCtx>,
         ledger: &Ledger,
@@ -75,15 +76,12 @@ impl Binder {
         let mut linker_instance = linker.instance(interface_name)
             .map_err(Error::Wasmtime)?;
 
-        // Create the client once for this target
-        let client = Client::new(target.transport);
-
         for (method_name, signature) in schema.funcs.iter() {
             bind_method(
                 &mut linker_instance,
                 method_name,
+                target.peer_id.clone(),
                 target.target_id.clone(),
-                client.clone(),
                 signature.results.clone(),
             )?;
         }
@@ -126,47 +124,47 @@ impl Binder {
 //       has instructions for how to decode specific types
 //       and we calculate this once instead of tree-walking
 /// Generates the async closure for a specific method within an instance.
+/// The closure resolves the peer_id to a Peer at call time via the Runtime
+/// in ExorunCtx, enabling transparent reconnection.
 fn bind_method(
     linker_instance: &mut LinkerInstance<ExorunCtx>,
     method_name: &str,
+    peer_id: PeerId,
     target_id: String,
-    client: Client,
     result_types: Vec<Type>,
 ) -> Result<()> {
     let method_name_clone = method_name.to_string();
 
-    linker_instance.func_new_async(method_name, move |_store, _func_ty, args, results| {
-        let client = client.clone();
+    linker_instance.func_new_async(method_name, move |store, _func_ty, args, results| {
+        let peer_id = peer_id.clone();
         let result_types = result_types.clone();
         let target_id = target_id.clone();
         let method_name = method_name_clone.clone();
 
         Box::new(async move {
-            // Prepare the call (increments seq and inserts pending)
-            let (seq, rx) = client.prepare_call(result_types);
+            // Get runtime from store context and resolve peer_id to peer
+            let runtime = store.data().runtime.clone();
+            let peer = runtime.get_peer(&peer_id)
+                .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
 
-            // Encode arguments directly without copying
+            // prepare the call by incrementing seq and reserving pending
+            let (seq, rx) = peer.prepare_call(result_types);
+
+            // encode arguments directly without copying
             let args_bytes = neorpc::encode_vals_to_bytes(args)
                 .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
 
-            // Build the payload using CallEncoder
+            // build the payload
             let payload = CallEncoder::new(seq, &target_id, &method_name, &args_bytes)
                 .into_bytes()
                 .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
 
-            // Send and await response
-            let return_vals = client.send_and_await(seq, payload, rx)
+            // send and await response
+            let return_vals = peer.send_and_await(seq, payload, rx)
                 .await
                 .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
 
-            if return_vals.len() != results.len() {
-                return Err(wasmtime::Error::msg(format!(
-                    "Result count mismatch: expected {}, got {}",
-                    results.len(),
-                    return_vals.len()
-                )));
-            }
-
+            // copy out return vals
             for (i, val) in return_vals.into_iter().enumerate() {
                 results[i] = val;
             }
@@ -240,6 +238,11 @@ mod tests {
 
     use tokio::sync::Mutex;
 
+    use crate::peer::Peer;
+    use crate::runtime::PeerId;
+    use crate::runtime::Runtime;
+    use crate::transport::Transport;
+
     struct MockTransport {
         pending: Arc<Mutex<Option<Vec<u8>>>>,
     }
@@ -304,17 +307,23 @@ mod tests {
         let component = compile_component(&engine, wat);
         let ledger = Ledger::from_component(&component).unwrap();
 
+        // Create runtime and register peer
+        let runtime = Arc::new(Runtime::with_engine(engine.clone()));
+        let transport = Box::new(MockTransport::new());
+        let peer = Arc::new(Peer::new("test-peer", transport));
+        let peer_id = runtime.add_peer(peer);
+
         let mut linker = Linker::<ExorunCtx>::new(&engine);
-        let transport = Arc::new(MockTransport::new());
         let target = RemoteTarget {
-            transport,
+            peer_id,
             target_id: "service-1".to_string(),
         };
 
         Binder::link_remote_interface(&mut linker, &ledger, "my:service/api", target)
             .expect("Binding failed");
 
-        let mut store = Store::new(&engine, ExorunCtx::new());
+        let ctx = crate::context::ContextBuilder::new().build(Arc::clone(&runtime));
+        let mut store = Store::new(&engine, ctx);
         let instance = linker.instantiate_async(&mut store, &component).await
             .expect("Instantiation failed");
 
@@ -331,8 +340,9 @@ mod tests {
         let ledger = Ledger::from_component(&component).unwrap();
 
         let mut linker = Linker::<ExorunCtx>::new(&engine);
+        let peer_id = crate::runtime::PeerId(1);  // Use a dummy peer ID
         let target = RemoteTarget {
-            transport: Arc::new(MockTransport::new()),
+            peer_id,
             target_id: "s".into(),
         };
 

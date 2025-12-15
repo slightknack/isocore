@@ -1,6 +1,6 @@
-//! # RPC Client with Async Pump
+//! # RPC Peer with Async Pump
 //!
-//! This module provides the `Client` abstraction for making RPC calls over a transport.
+//! This module provides the `Peer` abstraction for making RPC calls over a transport.
 //! It uses an async pump task to demultiplex incoming responses and correlate them
 //! with pending requests via sequence numbers.
 
@@ -79,20 +79,27 @@ struct PendingResponse {
     tx: oneshot::Sender<Result<Vec<Val>>>,
 }
 
-/// RPC client with async message pump for concurrent requests.
+/// RPC peer with async message pump for concurrent requests.
 ///
-/// The client spawns a background task that continuously reads from the transport
+/// The peer spawns a background task that continuously reads from the transport
 /// and routes responses to the appropriate pending request based on sequence number.
-#[derive(Clone)]
-pub struct Client {
+///
+/// Each Peer owns its transport exclusively, ensuring sequence numbers are scoped
+/// to a single transport. Peers can be wrapped in Arc for sharing across threads.
+pub struct Peer {
+    peer_name: String,
     transport: Arc<dyn Transport>,
     pending: Arc<DashMap<u64, PendingResponse>>,
     seq_gen: Arc<AtomicU64>,
 }
 
-impl Client {
-    /// Creates a new client and spawns the background pump task.
-    pub fn new(transport: Arc<dyn Transport>) -> Self {
+impl Peer {
+    /// Creates a new peer and spawns the background pump task.
+    /// Takes ownership of the transport and converts it to Arc internally.
+    /// The peer_name is used for logging and diagnostics.
+    pub fn new(peer_name: impl Into<String>, transport: Box<dyn Transport>) -> Self {
+        let peer_name = peer_name.into();
+        let transport: Arc<dyn Transport> = Arc::from(transport);
         let pending = Arc::new(DashMap::new());
 
         // Spawn the pump task
@@ -118,16 +125,22 @@ impl Client {
                     }
                 }
             };
-            
+
             // Notify all pending requests with the error
             Self::notify_all_pending(&pump_pending, error);
         });
 
         Self {
+            peer_name,
             transport,
             pending,
             seq_gen: Arc::new(AtomicU64::new(1)),
         }
+    }
+
+    /// Returns the peer name for this client.
+    pub fn peer_name(&self) -> &str {
+        &self.peer_name
     }
 
     /// Notify all pending requests with the given error.
@@ -162,8 +175,20 @@ impl Client {
         // Decode the result
         let result = match reply.status {
             Ok(val_decoder) => {
-                decode_vals(val_decoder, &pending_resp.result_types)
-                    .map_err(Error::from)
+                // decode values
+                let vals = decode_vals(val_decoder, &pending_resp.result_types)
+                    .map_err(Error::from)?;
+
+                // make sure we got all of them
+                let expected = pending_resp.result_types.len();
+                let actual = vals.len();
+                if expected != actual {
+                    let message = format!("Result count mismatch: expected {}, got {}", expected, actual);
+                    let error = neorpc::Error::ProtocolViolation(message);
+                    return Err(Error::NeoRpc(error));
+                }
+
+                Ok(vals)
             }
             Err(reason) => Err(Error::Remote(reason)),
         };
@@ -225,8 +250,6 @@ impl Client {
         }
     }
 
-    // TODO: remove this method
-    ///
     /// This method encodes the request, sends it, and awaits the response
     /// with a timeout. The response is correlated via sequence number.
     pub async fn call(
@@ -239,9 +262,8 @@ impl Client {
         let (seq, rx) = self.prepare_call(result_types);
 
         // Step 1: Encode arguments via codec (produces Vec<u8>)
-        let args_bytes = neorpc::encode_vals_to_bytes(args)?;
-
         // Step 2: Encode frame via framing (injects args_bytes)
+        let args_bytes = neorpc::encode_vals_to_bytes(args)?;
         let mut enc = Encoder::new();
         CallEncoder::new(seq, target, method, &args_bytes).encode(&mut enc)?;
         let payload = enc.into_bytes()?;
