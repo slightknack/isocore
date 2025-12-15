@@ -329,14 +329,14 @@ async fn test_concurrent_correlation() {
     use neopack::Encoder;
     use neorpc::encode_vals_to_bytes;
     use tokio::sync::mpsc;
-    
+
     // Create a duplex channel transport pair
     let (client_tx, mut server_rx) = mpsc::unbounded_channel();
     let (server_tx, client_rx) = mpsc::unbounded_channel();
-    
+
     let client_transport = Box::new(DuplexChannelTransport::new(client_tx, client_rx));
     let peer = Arc::new(Peer::new("test-peer", client_transport));
-    
+
     // Spawn 10 concurrent peer tasks
     let mut tasks = Vec::new();
     for i in 0..10 {
@@ -345,7 +345,7 @@ async fn test_concurrent_correlation() {
             let args = vec![Val::U32(i)];
             let result_types = vec![Type::U32];
             let results = peer.call("target", "method", &args, result_types).await.unwrap();
-            
+
             // Verify we got the right response
             let expected = 1;
             let actual = results.len();
@@ -357,7 +357,7 @@ async fn test_concurrent_correlation() {
         });
         tasks.push(task);
     }
-    
+
     // Server side: collect all requests
     let mut requests = Vec::new();
     for _ in 0..10 {
@@ -365,37 +365,37 @@ async fn test_concurrent_correlation() {
             requests.push(req_bytes);
         }
     }
-    
+
     // Shuffle and respond in random order
     use rand::seq::SliceRandom;
     use rand::thread_rng;
     requests.shuffle(&mut thread_rng());
-    
+
     for req_bytes in requests {
         // Decode request to get seq and input value
         let mut dec = Decoder::new(&req_bytes);
         let frame = RpcFrame::decode(&mut dec).unwrap();
-        
-        if let RpcFrame::Call(mut call) = frame {
+
+        if let RpcFrame::Call(call) = frame {
             // Extract input value
             let args = decode_vals(call.args, &[Type::U32]).unwrap();
             let input = match &args[0] {
                 Val::U32(v) => *v,
                 _ => panic!("Expected U32"),
             };
-            
+
             // Send response with doubled value
             let results = vec![Val::U32(input * 2)];
             let results_bytes = encode_vals_to_bytes(&results).unwrap();
-            
+
             let mut enc = Encoder::new();
             ReplyOkEncoder::new(call.seq, &results_bytes).encode(&mut enc).unwrap();
             let reply_bytes = enc.into_bytes().unwrap();
-            
+
             server_tx.send(reply_bytes).unwrap();
         }
     }
-    
+
     // Wait for all client tasks to complete
     for task in tasks {
         task.await.unwrap();
@@ -406,11 +406,11 @@ async fn test_concurrent_correlation() {
 #[tokio::test]
 async fn test_failure_fidelity() {
     use tokio::sync::Mutex;
-    
+
     struct DomainErrorTransport {
         pending: Arc<Mutex<Option<Vec<u8>>>>,
     }
-    
+
     impl DomainErrorTransport {
         fn new() -> Self {
             Self {
@@ -418,7 +418,7 @@ async fn test_failure_fidelity() {
             }
         }
     }
-    
+
     #[async_trait::async_trait]
     impl Transport for DomainErrorTransport {
         async fn send(&self, payload: &[u8]) -> transport::Result<()> {
@@ -429,7 +429,7 @@ async fn test_failure_fidelity() {
                 RpcFrame::Call(call) => call.seq,
                 _ => 0,
             };
-            
+
             // Send back a DomainSpecific error
             let mut enc = Encoder::new();
             ReplyErrEncoder::new(seq, FailureReason::DomainSpecific(42, "Auth failed".into()))
@@ -439,20 +439,20 @@ async fn test_failure_fidelity() {
             *self.pending.lock().await = Some(response);
             Ok(())
         }
-        
+
         async fn recv(&self) -> transport::Result<Option<Vec<u8>>> {
             Ok(self.pending.lock().await.take())
         }
     }
-    
+
     let transport = Box::new(DomainErrorTransport::new());
     let peer = Peer::new("test-peer", transport);
-    
+
     let args = vec![Val::U32(1)];
     let result_types = vec![Type::U32];
-    
+
     let err = peer.call("target", "method", &args, result_types).await.unwrap_err();
-    
+
     // Verify the error is exactly what we sent
     match err {
         peer::Error::Remote(FailureReason::DomainSpecific(code, msg)) => {

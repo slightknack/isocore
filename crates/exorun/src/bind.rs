@@ -17,14 +17,15 @@ use wasmtime::component::Linker;
 use wasmtime::component::LinkerInstance;
 use wasmtime::component::Type;
 use wasmtime::component::Val;
-
 use neorpc::CallEncoder;
 
+use crate::context::ContextBuilder;
 use crate::context::ExorunCtx;
-use crate::instance::InstanceHandle;
+use crate::instance::LocalTarget;
 use crate::instance::State;
 use crate::ledger::Ledger;
 use crate::runtime::PeerId;
+use crate::system::SystemTarget;
 
 #[derive(Debug)]
 pub enum Error {
@@ -97,7 +98,7 @@ impl Binder {
         linker: &mut Linker<ExorunCtx>,
         ledger: &Ledger,
         interface_name: &str,
-        target: InstanceHandle,
+        target: LocalTarget,
     ) -> Result<()> {
         let schema = ledger.interfaces.get(interface_name)
             .ok_or_else(|| Error::InterfaceNotFound(interface_name.to_string()))?;
@@ -180,7 +181,7 @@ fn bind_method(
 fn bind_local_method(
     linker_instance: &mut LinkerInstance<ExorunCtx>,
     method_name: &str,
-    target: InstanceHandle,
+    target: LocalTarget,
     _param_count: usize,
     result_count: usize,
 ) -> Result<()> {

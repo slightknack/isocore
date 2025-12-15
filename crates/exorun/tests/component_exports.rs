@@ -11,7 +11,7 @@ use wasmtime::component::types::ComponentItem;
 
 use exorun::context::ExorunCtx;
 use exorun::runtime::Runtime;
-use exorun::system::{SystemComponent, WasiSystem};
+use exorun::system::{SystemTarget, WasiSystem};
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -36,9 +36,7 @@ impl TestLogger {
     fn get_logs(&self) -> Vec<String> {
         self.logs.lock().unwrap().clone()
     }
-}
 
-impl SystemComponent for TestLogger {
     fn install(&self, linker: &mut Linker<ExorunCtx>) -> Result<(), exorun::system::Error> {
         let logs = self.logs.clone();
 
@@ -57,13 +55,6 @@ impl SystemComponent for TestLogger {
             )
             .map_err(|e| exorun::system::Error::Linker(e.to_string()))?;
 
-        Ok(())
-    }
-
-    fn configure(
-        &self,
-        _builder: &mut exorun::context::ContextBuilder,
-    ) -> Result<(), exorun::system::Error> {
         Ok(())
     }
 }
@@ -87,13 +78,15 @@ async fn test_low_level_component_export_navigation() {
     let logger = TestLogger::new();
 
     // Set up linker with system components
+    let rt = std::sync::Arc::new(rt);
     let mut linker = Linker::new(rt.engine());
+    let mut ctx_builder = exorun::context::ContextBuilder::new();
+    
     logger.install(&mut linker).expect("Failed to install logger");
-    WasiSystem::new().install(&mut linker).expect("Failed to install WASI");
+    SystemTarget::Wasi(WasiSystem::new()).link(&mut linker, &mut ctx_builder).expect("Failed to link WASI");
 
     // Create store with runtime context
-    let rt = std::sync::Arc::new(rt);
-    let ctx = exorun::context::ContextBuilder::new().build(std::sync::Arc::clone(&rt));
+    let ctx = ctx_builder.build(std::sync::Arc::clone(&rt));
     let mut store = wasmtime::Store::new(rt.engine(), ctx);
 
     // Instantiate the component

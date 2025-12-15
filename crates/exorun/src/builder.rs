@@ -10,10 +10,10 @@ use wasmtime::Store;
 use crate::bind::Binder;
 use crate::bind::RemoteTarget;
 use crate::context::ContextBuilder;
-use crate::instance::InstanceHandle;
+use crate::instance::LocalTarget;
 use crate::runtime::AppId;
 use crate::runtime::Runtime;
-use crate::system::SystemComponent;
+use crate::system::SystemTarget;
 
 #[derive(Debug)]
 pub enum Error {
@@ -60,8 +60,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Linking strategy for an interface.
 pub enum Linkable {
-    System(Box<dyn SystemComponent>),
-    Local { interface: String, target: InstanceHandle },
+    System { interface: String, target: SystemTarget },
+    Local { interface: String, target: LocalTarget },
     Remote { interface: String, target: RemoteTarget },
 }
 
@@ -83,12 +83,15 @@ impl InstanceBuilder {
         }
     }
 
-    pub fn link_system(mut self, system: Box<dyn SystemComponent>) -> Self {
-        self.links.push(Linkable::System(system));
+    pub fn link_system(mut self, interface: impl Into<String>, component: SystemTarget) -> Self {
+        self.links.push(Linkable::System {
+            interface: interface.into(),
+            target: component,
+        });
         self
     }
 
-    pub fn link_local(mut self, interface: impl Into<String>, target: InstanceHandle) -> Self {
+    pub fn link_local(mut self, interface: impl Into<String>, target: LocalTarget) -> Self {
         self.links.push(Linkable::Local {
             interface: interface.into(),
             target,
@@ -109,7 +112,7 @@ impl InstanceBuilder {
         self
     }
 
-    pub async fn instantiate(mut self) -> Result<InstanceHandle> {
+    pub async fn instantiate(mut self) -> Result<LocalTarget> {
         let component = self.runtime.get_app(self.app_id)?;
         let ledger = crate::ledger::Ledger::from_component(&component)
             .map_err(|e| Error::Linker(wasmtime::Error::msg(e.to_string())))?;
@@ -119,9 +122,8 @@ impl InstanceBuilder {
         // Process links (consuming them to transfer ownership)
         for link in self.links {
             match link {
-                Linkable::System(system) => {
-                    system.install(&mut linker)?;
-                    system.configure(&mut self.context_builder)?;
+                Linkable::System { interface: _, target } => {
+                    target.link(&mut linker, &mut self.context_builder)?;
                 }
                 Linkable::Local { interface, target } => {
                     Binder::link_local_interface(&mut linker, &ledger, &interface, target.clone())?;
@@ -140,6 +142,6 @@ impl InstanceBuilder {
             .await
             .map_err(Error::Instantiate)?;
 
-        Ok(InstanceHandle::new(store, instance))
+        Ok(LocalTarget::new(store, instance))
     }
 }

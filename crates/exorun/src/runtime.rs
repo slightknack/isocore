@@ -15,7 +15,7 @@ use wasmtime::Engine;
 use wasmtime::component::Component;
 
 use crate::peer::Peer;
-use crate::instance::InstanceHandle;
+use crate::instance::LocalTarget;
 
 /// Strong type for application identifiers.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
@@ -84,7 +84,7 @@ pub struct Runtime {
     pub(crate) engine: Engine,
     pub(crate) apps: DashMap<AppId, Component>,
     pub(crate) peers: DashMap<PeerId, Arc<Peer>>,
-    pub(crate) instances: DashMap<InstanceId, InstanceHandle>,
+    pub(crate) instances: DashMap<InstanceId, LocalTarget>,
     next_app_id: AtomicU64,
     next_peer_id: AtomicU64,
     next_instance_id: AtomicU64,
@@ -146,7 +146,7 @@ impl Runtime {
     }
 
     /// Registers an instance handle and returns its unique ID.
-    pub(crate) fn register_instance(&self, handle: InstanceHandle) -> InstanceId {
+    pub(crate) fn register_instance(&self, handle: LocalTarget) -> InstanceId {
         let id = InstanceId(self.next_instance_id.fetch_add(1, Ordering::Relaxed));
         self.instances.insert(id, handle);
         id
@@ -178,7 +178,7 @@ impl Runtime {
     }
 
     /// Retrieves an instance handle by ID.
-    pub fn get_instance(&self, id: InstanceId) -> Result<InstanceHandle> {
+    pub fn get_instance(&self, id: InstanceId) -> Result<LocalTarget> {
         self.instances
             .get(&id)
             .map(|entry| entry.value().clone())

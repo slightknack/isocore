@@ -43,7 +43,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// async access from multiple tasks. This allows one instance to call into another
 /// instance without data races.
 #[derive(Clone)]
-pub struct InstanceHandle {
+pub struct LocalTarget {
     pub(crate) inner: Arc<Mutex<State>>,
 }
 
@@ -52,9 +52,9 @@ pub(crate) struct State {
     pub instance: Instance,
 }
 
-impl InstanceHandle {
+impl LocalTarget {
     /// Creates a new instance handle wrapping the store and instance.
-    pub(crate) fn new(store: Store<ExorunCtx>, instance: Instance) -> Self {
+    pub fn new(store: Store<ExorunCtx>, instance: Instance) -> Self {
         Self {
             inner: Arc::new(Mutex::new(State { store, instance })),
         }
@@ -159,5 +159,3 @@ impl InstanceHandle {
         f(store, instance).await
     }
 }
-
-

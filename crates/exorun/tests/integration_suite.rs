@@ -10,9 +10,8 @@ use exorun::bind::RemoteTarget;
 use exorun::builder::InstanceBuilder;
 use exorun::peer::Peer;
 use exorun::context::ExorunCtx;
-use exorun::runtime;
 use exorun::runtime::Runtime;
-use exorun::system::SystemComponent;
+use exorun::system::SystemTarget;
 use exorun::system::WasiSystem;
 use exorun::transport::Transport;
 
@@ -78,9 +77,7 @@ impl SysLogger {
     fn get_logs(&self) -> Vec<String> {
         self.logs.lock().unwrap().clone()
     }
-}
 
-impl SystemComponent for SysLogger {
     fn install(&self, linker: &mut Linker<ExorunCtx>) -> Result<(), exorun::system::Error> {
         let logs = self.logs.clone();
 
@@ -101,13 +98,6 @@ impl SystemComponent for SysLogger {
 
         Ok(())
     }
-
-    fn configure(
-        &self,
-        _builder: &mut exorun::context::ContextBuilder,
-    ) -> Result<(), exorun::system::Error> {
-        Ok(())
-    }
 }
 
 #[tokio::test]
@@ -118,15 +108,25 @@ async fn test_system_integration() {
     let app_id = rt
         .register_app(&wasm("app_logger"))
         .expect("Failed to register app");
-    
+
     let component = rt.get_app(app_id).expect("Failed to get component");
 
-    let instance = InstanceBuilder::new(Arc::clone(&rt), app_id)
-        .link_system(Box::new(WasiSystem::new()))
-        .link_system(Box::new(logger_sys.clone()))
-        .instantiate()
+    // For custom system components, we need to manually set up the linker
+    let mut linker = Linker::new(rt.engine());
+    let mut ctx_builder = exorun::context::ContextBuilder::new();
+    
+    SystemTarget::Wasi(WasiSystem::new()).link(&mut linker, &mut ctx_builder).expect("Failed to link WASI");
+    logger_sys.install(&mut linker).expect("Failed to install logger");
+
+    let ctx = ctx_builder.build(Arc::clone(&rt));
+    let mut store = wasmtime::Store::new(rt.engine(), ctx);
+
+    let wasmtime_instance = linker
+        .instantiate_async(&mut store, &component)
         .await
         .expect("Failed to instantiate");
+
+    let instance = exorun::instance::LocalTarget::new(store, wasmtime_instance);
 
     // Call the run() function from the test:demo/runnable interface
     use wasmtime::component::Val;
@@ -169,13 +169,13 @@ async fn test_app_to_app_local() {
         .expect("Failed to register consumer");
 
     let provider_inst = InstanceBuilder::new(Arc::clone(&rt), provider_id)
-        .link_system(Box::new(WasiSystem::new()))
+        .link_system("wasi", SystemTarget::Wasi(WasiSystem::new()))
         .instantiate()
         .await
         .expect("Failed to instantiate provider");
 
     let consumer_inst = InstanceBuilder::new(Arc::clone(&rt), consumer_id)
-        .link_system(Box::new(WasiSystem::new()))
+        .link_system("wasi", SystemTarget::Wasi(WasiSystem::new()))
         .link_local("test:demo/math", provider_inst)
         .instantiate()
         .await
@@ -186,7 +186,7 @@ async fn test_app_to_app_local() {
     // 1. Provider instance can be created
     // 2. Consumer instance can be created with local link to provider
     // 3. App-to-app wiring is correctly set up
-    
+
     // Future work: Execute consumer's run() which should call provider's add()
     // let result = consumer_inst.exec(|store, inst| { ... }).await;
     let _ = consumer_inst;
@@ -205,9 +205,7 @@ impl InMemoryKv {
             store: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-}
 
-impl SystemComponent for InMemoryKv {
     fn install(&self, linker: &mut Linker<ExorunCtx>) -> Result<(), exorun::system::Error> {
         let store = self.store.clone();
 
@@ -243,13 +241,6 @@ impl SystemComponent for InMemoryKv {
 
         Ok(())
     }
-
-    fn configure(
-        &self,
-        _builder: &mut exorun::context::ContextBuilder,
-    ) -> Result<(), exorun::system::Error> {
-        Ok(())
-    }
 }
 
 #[tokio::test]
@@ -261,18 +252,29 @@ async fn test_stateful_system() {
         .register_app(&wasm("app_kv"))
         .expect("Failed to register app");
 
-    let instance = InstanceBuilder::new(Arc::clone(&rt), app_id)
-        .link_system(Box::new(WasiSystem::new()))
-        .link_system(Box::new(kv_sys.clone()))
-        .instantiate()
+    // For custom system components, we need to manually set up the linker
+    let component = rt.get_app(app_id).expect("Failed to get component");
+    let mut linker = Linker::new(rt.engine());
+    let mut ctx_builder = exorun::context::ContextBuilder::new();
+    
+    SystemTarget::Wasi(WasiSystem::new()).link(&mut linker, &mut ctx_builder).expect("Failed to link WASI");
+    kv_sys.install(&mut linker).expect("Failed to install kv");
+
+    let ctx = ctx_builder.build(Arc::clone(&rt));
+    let mut store = wasmtime::Store::new(rt.engine(), ctx);
+
+    let wasmtime_instance = linker
+        .instantiate_async(&mut store, &component)
         .await
         .expect("Failed to instantiate");
+
+    let instance = exorun::instance::LocalTarget::new(store, wasmtime_instance);
 
     // TODO: Execute and verify KV operations once fixtures are updated
     // For now, we've verified that:
     // 1. Instance can be created with stateful system component
     // 2. InMemoryKv system is properly linked
-    
+
     // Future work: Execute run() which should set/get values in KV
     // let result = instance.exec(|store, inst| { ... }).await;
     let _kv_store = kv_sys.store.lock().unwrap();
@@ -288,13 +290,13 @@ async fn test_remote_peer_mock() {
     let transport = Box::new(MockTransport);
     let peer = Arc::new(Peer::new("math-service", transport));
     let peer_id = rt.add_peer(peer);
-    
+
     let app_id = rt
         .register_app(&wasm("app_consumer"))
         .expect("Failed to register app");
 
     let instance = InstanceBuilder::new(Arc::clone(&rt), app_id)
-        .link_system(Box::new(WasiSystem::new()))
+        .link_system("wasi", SystemTarget::Wasi(WasiSystem::new()))
         .link_remote(
             "test:demo/math",
             RemoteTarget {
@@ -311,7 +313,7 @@ async fn test_remote_peer_mock() {
     // 1. Instance can be created with remote binding
     // 2. MockTransport is properly linked
     // 3. Remote target configuration is correct
-    
+
     // Future work: Execute run() which should attempt remote call
     // With MockTransport returning None, it should fail with connection error
     let _ = instance;
@@ -328,26 +330,48 @@ async fn test_diamond_dependency() {
         .register_app(&wasm("app_kv"))
         .expect("Failed to register app");
 
-    let inst_a = InstanceBuilder::new(Arc::clone(&rt), app_id)
-        .link_system(Box::new(WasiSystem::new()))
-        .link_system(Box::new(shared_kv.clone()))
-        .instantiate()
+    let component = rt.get_app(app_id).expect("Failed to get component");
+
+    // Create instance A with shared KV
+    let mut linker_a = Linker::new(rt.engine());
+    let mut ctx_builder_a = exorun::context::ContextBuilder::new();
+    
+    SystemTarget::Wasi(WasiSystem::new()).link(&mut linker_a, &mut ctx_builder_a).expect("Failed to link WASI");
+    shared_kv.install(&mut linker_a).expect("Failed to install kv");
+
+    let ctx_a = ctx_builder_a.build(Arc::clone(&rt));
+    let mut store_a = wasmtime::Store::new(rt.engine(), ctx_a);
+
+    let wasmtime_instance_a = linker_a
+        .instantiate_async(&mut store_a, &component)
         .await
         .expect("Failed to instantiate instance A");
 
-    let inst_b = InstanceBuilder::new(Arc::clone(&rt), app_id)
-        .link_system(Box::new(WasiSystem::new()))
-        .link_system(Box::new(shared_kv.clone()))
-        .instantiate()
+    let inst_a = exorun::instance::LocalTarget::new(store_a, wasmtime_instance_a);
+
+    // Create instance B with same shared KV
+    let mut linker_b = Linker::new(rt.engine());
+    let mut ctx_builder_b = exorun::context::ContextBuilder::new();
+    
+    SystemTarget::Wasi(WasiSystem::new()).link(&mut linker_b, &mut ctx_builder_b).expect("Failed to link WASI");
+    shared_kv.install(&mut linker_b).expect("Failed to install kv");
+
+    let ctx_b = ctx_builder_b.build(Arc::clone(&rt));
+    let mut store_b = wasmtime::Store::new(rt.engine(), ctx_b);
+
+    let wasmtime_instance_b = linker_b
+        .instantiate_async(&mut store_b, &component)
         .await
         .expect("Failed to instantiate instance B");
+
+    let inst_b = exorun::instance::LocalTarget::new(store_b, wasmtime_instance_b);
 
     // TODO: Execute both instances and verify shared state once fixtures are updated
     // For now, we've verified that:
     // 1. Multiple instances can be created from the same app
     // 2. Both instances can share the same system component (shared_kv)
     // 3. Diamond dependency pattern is correctly set up
-    
+
     // Future work: Execute both instances and verify they share KV state
     // let result_a = inst_a.exec(|store, inst| { ... }).await;
     // let result_b = inst_b.exec(|store, inst| { ... }).await;
