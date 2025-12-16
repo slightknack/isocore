@@ -1,7 +1,9 @@
-//! # Runtime Registry
+//! # Runtime registry of peers, components, and instances
 //!
-//! Central registry for the application lifecycle. Manages compiled components (Apps)
-//! and active executions (Instances).
+//! Central registry for peers, components, and instances.
+//! Manages compiled components (Components),
+//! and active executions (Instances),
+//! and other connected runtimes (Peers),
 //!
 //! Uses DashMap for concurrent access without global locking, enabling high-throughput
 //! scenarios where multiple tasks register apps or spawn instances simultaneously.
@@ -15,13 +17,14 @@ use wasmtime::Engine;
 use wasmtime::component::Component;
 
 use crate::peer::Peer;
-use crate::instance::LocalTarget;
+use crate::local::LocalInstance;
+use crate::peer::PeerInstance;
 
 /// Strong type for application identifiers.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
-pub struct AppId(pub u64);
+pub struct ComponentId(pub u64);
 
-impl std::fmt::Display for AppId {
+impl std::fmt::Display for ComponentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "app-{}", self.0)
     }
@@ -39,6 +42,15 @@ impl std::fmt::Display for PeerId {
     }
 }
 
+impl PeerId {
+    pub fn get_instance(&self, target_id: impl Into<String>) -> PeerInstance {
+        PeerInstance {
+            peer_id: *self,
+            target_id: target_id.into(),
+        }
+    }
+}
+
 /// Strong type for instance identifiers.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct InstanceId(pub u64);
@@ -51,7 +63,7 @@ impl std::fmt::Display for InstanceId {
 
 #[derive(Debug)]
 pub enum Error {
-    AppNotFound(AppId),
+    AppNotFound(ComponentId),
     PeerNotFound(PeerId),
     InstanceNotFound(InstanceId),
     Engine(wasmtime::Error),
@@ -82,11 +94,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// - Instances: Running component instances
 pub struct Runtime {
     pub(crate) engine: Engine,
-    pub(crate) apps: DashMap<AppId, Component>,
     pub(crate) peers: DashMap<PeerId, Arc<Peer>>,
-    pub(crate) instances: DashMap<InstanceId, LocalTarget>,
-    next_app_id: AtomicU64,
+    pub(crate) components: DashMap<ComponentId, Component>,
+    pub(crate) instances: DashMap<InstanceId, LocalInstance>,
     next_peer_id: AtomicU64,
+    next_component_id: AtomicU64,
     next_instance_id: AtomicU64,
 }
 
@@ -101,10 +113,10 @@ impl Runtime {
 
         Ok(Self {
             engine,
-            apps: DashMap::new(),
+            components: DashMap::new(),
             peers: DashMap::new(),
             instances: DashMap::new(),
-            next_app_id: AtomicU64::new(1),
+            next_component_id: AtomicU64::new(1),
             next_peer_id: AtomicU64::new(1),
             next_instance_id: AtomicU64::new(1),
         })
@@ -114,10 +126,10 @@ impl Runtime {
     pub fn with_engine(engine: Engine) -> Self {
         Self {
             engine,
-            apps: DashMap::new(),
+            components: DashMap::new(),
             peers: DashMap::new(),
             instances: DashMap::new(),
-            next_app_id: AtomicU64::new(1),
+            next_component_id: AtomicU64::new(1),
             next_peer_id: AtomicU64::new(1),
             next_instance_id: AtomicU64::new(1),
         }
@@ -131,33 +143,41 @@ impl Runtime {
     /// Registers a compiled component and returns its unique ID.
     ///
     /// The component bytes are compiled if not already a Component.
-    pub fn register_app(&self, bytes: &[u8]) -> Result<AppId> {
+    pub fn add_component_bytes(&self, bytes: &[u8]) -> Result<ComponentId> {
         let component = Component::new(&self.engine, bytes).map_err(Error::Component)?;
-        let id = AppId(self.next_app_id.fetch_add(1, Ordering::Relaxed));
-        self.apps.insert(id, component);
+        let id = ComponentId(self.next_component_id.fetch_add(1, Ordering::Relaxed));
+        self.components.insert(id, component);
         Ok(id)
     }
 
     /// Registers a pre-compiled component and returns its unique ID.
-    pub fn register_component(&self, component: Component) -> AppId {
-        let id = AppId(self.next_app_id.fetch_add(1, Ordering::Relaxed));
-        self.apps.insert(id, component);
+    pub fn add_component(&self, component: Component) -> ComponentId {
+        let id = ComponentId(self.next_component_id.fetch_add(1, Ordering::Relaxed));
+        self.components.insert(id, component);
         id
     }
 
+    /// Retrieves a component by ID.
+    pub fn get_component(&self, id: ComponentId) -> Result<Component> {
+        self.components
+            .get(&id)
+            .map(|entry| entry.value().clone())
+            .ok_or(Error::AppNotFound(id))
+    }
+
     /// Registers an instance handle and returns its unique ID.
-    pub(crate) fn register_instance(&self, handle: LocalTarget) -> InstanceId {
+    pub(crate) fn add_instance(&self, handle: LocalInstance) -> InstanceId {
         let id = InstanceId(self.next_instance_id.fetch_add(1, Ordering::Relaxed));
         self.instances.insert(id, handle);
         id
     }
 
-    /// Retrieves a component by ID.
-    pub fn get_app(&self, id: AppId) -> Result<Component> {
-        self.apps
+    /// Retrieves an instance handle by ID.
+    pub fn get_instance(&self, id: InstanceId) -> Result<LocalInstance> {
+        self.instances
             .get(&id)
             .map(|entry| entry.value().clone())
-            .ok_or(Error::AppNotFound(id))
+            .ok_or(Error::InstanceNotFound(id))
     }
 
     /// Registers a peer with the runtime and returns its unique ID.
@@ -170,46 +190,10 @@ impl Runtime {
 
     /// Retrieves the peer handle for a given peer ID.
     /// Returns an error if the peer is not registered.
-    pub fn get_peer(&self, peer_id: &PeerId) -> Result<Arc<Peer>> {
+    pub fn get_peer(&self, peer_id: PeerId) -> Result<Arc<Peer>> {
         self.peers
-            .get(peer_id)
+            .get(&peer_id)
             .map(|entry| Arc::clone(entry.value()))
-            .ok_or(Error::PeerNotFound(*peer_id))
-    }
-
-    /// Retrieves an instance handle by ID.
-    pub fn get_instance(&self, id: InstanceId) -> Result<LocalTarget> {
-        self.instances
-            .get(&id)
-            .map(|entry| entry.value().clone())
-            .ok_or(Error::InstanceNotFound(id))
-    }
-
-    /// Removes an instance from the registry and initiates cleanup.
-    ///
-    /// This removes the instance handle from the registry. The actual cleanup of
-    /// resources (WASI file handles, memory, etc.) happens when the last reference
-    /// to the InstanceHandle is dropped.
-    ///
-    /// # Important Notes
-    ///
-    /// - If other code holds clones of the InstanceHandle (via `get_instance`),
-    ///   cleanup will be delayed until all references are dropped.
-    /// - Any ongoing async operations on the instance will continue until they
-    ///   complete or the handle is dropped.
-    /// - WASI resources are automatically cleaned up by the Store's Drop implementation.
-    ///
-    /// # Future Considerations
-    ///
-    /// In the future, this could be enhanced to:
-    /// - Forcefully terminate any running operations
-    /// - Cancel pending RPC calls
-    /// - Immediately flush and close WASI file handles
-    /// - Send shutdown signals to linked instances
-    pub fn remove_instance(&self, id: InstanceId) -> Result<()> {
-        self.instances
-            .remove(&id)
-            .ok_or(Error::InstanceNotFound(id))?;
-        Ok(())
+            .ok_or(Error::PeerNotFound(peer_id))
     }
 }

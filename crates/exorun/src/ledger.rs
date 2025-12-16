@@ -1,17 +1,13 @@
-//! # The Static Ledger
+//! # Ledger of component interfaces and required capabilities
 //!
 //! The Ledger is the source of truth for the capabilities of a Component.
-//! It maps the abstract intent of a WIT interface to the concrete schema
-//! required for RPC serialization.
+//! It maps the abstract intent of a WIT interface
+//! to the concrete schema required for RPC serialization.
 //!
 //! ## Philosophy
 //!
-//! - **Link-Time Safety**: We validate that interfaces are "wire-safe" (no resources)
-//!   at creation time, not call time.
-//! - **Schema Registry**: We store `wasmtime::component::Type` handles, keyed by
-//!   Interface and Method, allowing O(1) lookup during the hot path of an RPC call.
-//! - **Engine Coupling**: The Ledger holds `Type` handles which keep the
-//!   Wasmtime `Engine` alive. This is intentional.
+//! - **Link-Time Safety**: We validate that interfaces are "wire-safe" (contain no resources) at creation time.
+//! - **Schema Registry**: We store `wasmtime::component::Type` handles, allowing O(1) lookup during the hot path of an RPC call.
 
 use std::collections::HashMap;
 
@@ -58,6 +54,8 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+// TODO: we want to validate bidirectionally,
+//       so it might be worthwhile to list all exports too
 /// A registry of all imported interfaces and functions for a component.
 #[derive(Clone, Debug)]
 pub struct Ledger {
@@ -68,7 +66,7 @@ impl Ledger {
     /// Introspects a Component to build a Ledger of its imports.
     ///
     /// Only includes interfaces that are wire-safe (no resources, futures, or streams).
-    /// Interfaces that aren't wire-safe are silently skipped, as they may be system
+    /// Interfaces that aren't wire-safe are silently skipped, as they may be host
     /// components or local-only interfaces.
     pub fn from_component(component: &Component) -> Result<Self> {
         let engine = component.engine();
@@ -76,13 +74,13 @@ impl Ledger {
 
         for (name, item) in component.component_type().imports(engine) {
             let ComponentItem::ComponentInstance(inst_ty) = item else { continue };
-            
+
             // Try to extract the interface schema - skip if it's not wire-safe
             let interface = match InterfaceSchema::from_inst_ty(engine, name, inst_ty) {
                 Ok(schema) => schema,
                 Err(_) => continue, // Not wire-safe, skip it
             };
-            
+
             if interface.funcs.is_empty() { continue; }
             interfaces.insert(name.to_string(), interface);
         }
@@ -91,7 +89,7 @@ impl Ledger {
     }
 
     /// Looks up the signature for an interface method.
-    pub fn get_interface_func(&self, interface: &str, method: &str) -> Option<&FunctionSignature> {
+    pub fn get_interface_func(&self, interface: &str, method: &str) -> Option<&FuncSignature> {
         self.interfaces.get(interface).and_then(|i| i.funcs.get(method))
     }
 }
@@ -99,7 +97,7 @@ impl Ledger {
 /// The schema for a named interface (e.g., "wasi:filesystem/types").
 #[derive(Clone, Debug)]
 pub struct InterfaceSchema {
-    pub funcs: HashMap<String, FunctionSignature>,
+    pub funcs: HashMap<String, FuncSignature>,
 }
 
 impl InterfaceSchema {
@@ -112,7 +110,7 @@ impl InterfaceSchema {
         for (func_name, func_item) in inst_ty.exports(engine) {
             let ComponentItem::ComponentFunc(func_ty) = func_item else { continue };
             let import_name = format!("{name}#{func_name}");
-            let sig = FunctionSignature::from_func_ty(&func_ty, &import_name)?;
+            let sig = FuncSignature::from_func_ty(&func_ty, &import_name)?;
             funcs.insert(func_name.to_string(), sig);
         }
 
@@ -122,12 +120,12 @@ impl InterfaceSchema {
 
 /// The type signature of a specific function.
 #[derive(Clone, Debug)]
-pub struct FunctionSignature {
+pub struct FuncSignature {
     pub params: Vec<Type>,
     pub results: Vec<Type>,
 }
 
-impl FunctionSignature {
+impl FuncSignature {
     /// Extracts and validates a function signature from a ComponentFunc.
     ///
     /// Validates that all parameter and result types are wire-safe.

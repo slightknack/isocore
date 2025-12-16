@@ -1,6 +1,9 @@
-//! # Transport Abstraction
+//! # Message-based transport trait for connecting peers
 //!
 //! A minimal, async interface for moving bytes between runtimes.
+//! Each transport is held by exactly one Peer, who is responsible for
+//! Packaging messages, assigning sequence numbers, and
+//! pairing responses to corresponding requests.
 //!
 //! ## Philosophy
 //!

@@ -1,8 +1,11 @@
-//! # RPC Peer with Async Pump
+//! # Peer components on other machines called via RPC
 //!
-//! This module provides the `Peer` abstraction for making RPC calls over a transport.
+//! This module provides the `Peer` abstraction for making RPC calls over a Transport.
 //! It uses an async pump task to demultiplex incoming responses and correlate them
 //! with pending requests via sequence numbers.
+//!
+//! In the future, we may add support for streams etc.
+//! and data replication (a la hypercore, f.k.a. dat).
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -21,6 +24,7 @@ use neorpc::decode_vals;
 use wasmtime::component::Type;
 use wasmtime::component::Val;
 
+use crate::runtime::PeerId;
 use crate::transport::Transport;
 use crate::transport;
 
@@ -79,6 +83,14 @@ struct PendingResponse {
     tx: oneshot::Sender<Result<Vec<Val>>>,
 }
 
+/// A handle to the resources needed to bind a remote target.
+/// Uses a logical PeerId that will be resolved to a Peer at call time
+/// via the Runtime in ExorunCtx.
+pub struct PeerInstance {
+    pub peer_id: PeerId,
+    pub target_id: String,
+}
+
 /// RPC peer with async message pump for concurrent requests.
 ///
 /// The peer spawns a background task that continuously reads from the transport
@@ -106,6 +118,10 @@ impl Peer {
         let pump_transport = transport.clone();
         let pump_pending = pending.clone();
 
+        // TODO: ideally this never fails
+        //       we should try to reconnect,
+        //       or mark an interface as 'down' with the ability to
+        //       replace the inner transport after manual reconnect
         tokio::spawn(async move {
             let error = loop {
                 match pump_transport.recv().await {

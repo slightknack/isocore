@@ -1,29 +1,27 @@
-//! # System Component Interface
+//! # Host components implemented natively
 //!
-//! Defines system components - native Rust implementations that provide functionality
+//! Host components are native Rust implementations that provide functionality
 //! to Wasm components through host-defined interfaces.
 //!
-//! System components are organized as an exhaustive enum, with each variant implemented
-//! in its own module under `src/system/`.
+//! Host components are organized as an exhaustive enum,
+//! with each variant implemented in its own module under `src/system/`.
 
-pub mod target;
+pub mod instance;
 pub mod wasi;
 
-pub use target::SystemTarget;
-pub use wasi::WasiSystem;
+pub use instance::HostInstance;
+pub use wasi::Wasi;
 
 #[derive(Debug)]
 pub enum Error {
-    Linker(String),
-    Config(String),
+    Link(String),
     Wasmtime(wasmtime::Error),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Linker(msg) => write!(f, "Linker error: {}", msg),
-            Self::Config(msg) => write!(f, "Configuration error: {}", msg),
+            Self::Link(msg) => write!(f, "Linker error: {}", msg),
             Self::Wasmtime(e) => write!(f, "Wasmtime error: {}", e),
         }
     }

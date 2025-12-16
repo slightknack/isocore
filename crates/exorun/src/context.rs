@@ -1,3 +1,5 @@
+//! # Wasmtime instance context for local components
+//!
 //! Store context for running component instances.
 
 use std::sync::Arc;
@@ -73,6 +75,7 @@ pub struct ExorunCtx {
     pub(crate) wasi: WasiCtx,
     pub(crate) table: ResourceTable,
     pub(crate) user_data: anymap::Map<dyn anymap::any::Any + Send + Sync>,
+    // TODO: write method to get runtime?
     pub(crate) runtime: Arc<Runtime>,
 }
 

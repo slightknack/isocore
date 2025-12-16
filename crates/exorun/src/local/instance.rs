@@ -1,4 +1,4 @@
-//! # Instance Handle
+//! # Local component instances
 //!
 //! Provides a thread-safe handle to a running Wasm instance. Encapsulates the
 //! Store and Instance in a mutex to allow async operations from multiple tasks.
@@ -43,7 +43,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// async access from multiple tasks. This allows one instance to call into another
 /// instance without data races.
 #[derive(Clone)]
-pub struct LocalTarget {
+pub struct LocalInstance {
     pub(crate) inner: Arc<Mutex<State>>,
 }
 
@@ -52,7 +52,7 @@ pub(crate) struct State {
     pub instance: Instance,
 }
 
-impl LocalTarget {
+impl LocalInstance {
     /// Creates a new instance handle wrapping the store and instance.
     pub fn new(store: Store<ExorunCtx>, instance: Instance) -> Self {
         Self {

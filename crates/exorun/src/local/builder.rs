@@ -1,4 +1,4 @@
-//! # Instance Builder
+//! # Instance builder for local components
 //!
 //! Provides a fluent API for composing an instance with various linking strategies.
 
@@ -7,19 +7,22 @@ use std::sync::Arc;
 use wasmtime::component::Linker;
 use wasmtime::Store;
 
+use crate::bind;
 use crate::bind::Binder;
-use crate::bind::RemoteTarget;
 use crate::context::ContextBuilder;
-use crate::instance::LocalTarget;
-use crate::runtime::AppId;
+use crate::runtime;
+use crate::runtime::ComponentId;
 use crate::runtime::Runtime;
-use crate::system::SystemTarget;
+use crate::peer::PeerInstance;
+use crate::local::LocalInstance;
+use crate::host::HostInstance;
+use crate::host;
 
 #[derive(Debug)]
 pub enum Error {
-    Runtime(crate::runtime::Error),
-    System(crate::system::Error),
-    Bind(crate::bind::Error),
+    Runtime(runtime::Error),
+    Host(host::Error),
+    Bind(bind::Error),
     Linker(wasmtime::Error),
     Instantiate(wasmtime::Error),
 }
@@ -28,7 +31,7 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Runtime(e) => write!(f, "Runtime error: {}", e),
-            Self::System(e) => write!(f, "System error: {}", e),
+            Self::Host(e) => write!(f, "System error: {}", e),
             Self::Bind(e) => write!(f, "Bind error: {}", e),
             Self::Linker(e) => write!(f, "Linker error: {}", e),
             Self::Instantiate(e) => write!(f, "Instantiate error: {}", e),
@@ -38,20 +41,20 @@ impl std::fmt::Display for Error {
 
 impl std::error::Error for Error {}
 
-impl From<crate::runtime::Error> for Error {
-    fn from(e: crate::runtime::Error) -> Self {
+impl From<runtime::Error> for Error {
+    fn from(e: runtime::Error) -> Self {
         Self::Runtime(e)
     }
 }
 
-impl From<crate::system::Error> for Error {
-    fn from(e: crate::system::Error) -> Self {
-        Self::System(e)
+impl From<host::Error> for Error {
+    fn from(e: host::Error) -> Self {
+        Self::Host(e)
     }
 }
 
-impl From<crate::bind::Error> for Error {
-    fn from(e: crate::bind::Error) -> Self {
+impl From<bind::Error> for Error {
+    fn from(e: bind::Error) -> Self {
         Self::Bind(e)
     }
 }
@@ -59,61 +62,62 @@ impl From<crate::bind::Error> for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Linking strategy for an interface.
-pub enum Linkable {
-    System { interface: String, target: SystemTarget },
-    Local { interface: String, target: LocalTarget },
-    Remote { interface: String, target: RemoteTarget },
+pub enum Link {
+    System { interface: String, instance: HostInstance  },
+    Local  { interface: String, instance: LocalInstance },
+    Remote { interface: String, instance: PeerInstance  },
 }
 
 /// Fluent builder for creating instances with configured links.
 pub struct InstanceBuilder {
     runtime: Arc<Runtime>,
-    app_id: AppId,
-    links: Vec<Linkable>,
+    component_id: ComponentId,
+    links: Vec<Link>,
     context_builder: ContextBuilder,
 }
 
 impl InstanceBuilder {
-    pub fn new(runtime: Arc<Runtime>, app_id: AppId) -> Self {
+    pub fn new(runtime: Arc<Runtime>, component_id: ComponentId) -> Self {
         Self {
             runtime,
-            app_id,
+            component_id,
             links: Vec::new(),
             context_builder: ContextBuilder::new(),
         }
     }
 
-    pub fn link_system(mut self, interface: impl Into<String>, component: SystemTarget) -> Self {
-        self.links.push(Linkable::System {
+    pub fn link_system(mut self, interface: impl Into<String>, component: HostInstance) -> Self {
+        self.links.push(Link::System {
             interface: interface.into(),
-            target: component,
+            instance: component,
         });
         self
     }
 
-    pub fn link_local(mut self, interface: impl Into<String>, target: LocalTarget) -> Self {
-        self.links.push(Linkable::Local {
+    pub fn link_local(mut self, interface: impl Into<String>, target: LocalInstance) -> Self {
+        self.links.push(Link::Local {
             interface: interface.into(),
-            target,
+            instance: target,
         });
         self
     }
 
-    pub fn link_remote(mut self, interface: impl Into<String>, target: RemoteTarget) -> Self {
-        self.links.push(Linkable::Remote {
+    pub fn link_remote(mut self, interface: impl Into<String>, target: PeerInstance) -> Self {
+        self.links.push(Link::Remote {
             interface: interface.into(),
-            target,
+            instance: target,
         });
         self
     }
 
-    pub fn context(mut self, f: impl FnOnce(&mut ContextBuilder)) -> Self {
-        f(&mut self.context_builder);
-        self
-    }
+    // TODO: remove?
+    // pub fn context(mut self, f: impl FnOnce(&mut ContextBuilder)) -> Self {
+    //     f(&mut self.context_builder);
+    //     self
+    // }
 
-    pub async fn instantiate(mut self) -> Result<LocalTarget> {
-        let component = self.runtime.get_app(self.app_id)?;
+    pub async fn instantiate(mut self) -> Result<LocalInstance> {
+        let component = self.runtime.get_component(self.component_id)?;
         let ledger = crate::ledger::Ledger::from_component(&component)
             .map_err(|e| Error::Linker(wasmtime::Error::msg(e.to_string())))?;
 
@@ -122,14 +126,14 @@ impl InstanceBuilder {
         // Process links (consuming them to transfer ownership)
         for link in self.links {
             match link {
-                Linkable::System { interface: _, target } => {
+                Link::System { interface: _, instance: target } => {
                     target.link(&mut linker, &mut self.context_builder)?;
                 }
-                Linkable::Local { interface, target } => {
-                    Binder::link_local_interface(&mut linker, &ledger, &interface, target.clone())?;
+                Link::Local { interface, instance: target } => {
+                    Binder::local_interface(&mut linker, &ledger, &interface, target.clone())?;
                 }
-                Linkable::Remote { interface, target } => {
-                    Binder::link_remote_interface(&mut linker, &ledger, &interface, target)?;
+                Link::Remote { interface, instance: target } => {
+                    Binder::peer_interface(&mut linker, &ledger, &interface, target)?;
                 }
             }
         }
@@ -142,6 +146,6 @@ impl InstanceBuilder {
             .await
             .map_err(Error::Instantiate)?;
 
-        Ok(LocalTarget::new(store, instance))
+        Ok(LocalInstance::new(store, instance))
     }
 }
