@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 use wasmtime::component::Linker;
+use wasmtime::component::Val;
 
-use exorun::peer::PeerInstance;
 use exorun::local::InstanceBuilder;
 use exorun::peer::Peer;
 use exorun::context::ExorunCtx;
@@ -126,7 +126,7 @@ async fn test_system_integration() {
         .await
         .expect("Failed to instantiate");
 
-    let instance = exorun::local::LocalInstance::new(store, wasmtime_instance);
+    let instance = exorun::local::LocalInstance::new(store, wasmtime_instance, component.clone());
 
     // Call the run() function from the test:demo/runnable interface
     use wasmtime::component::Val;
@@ -181,15 +181,32 @@ async fn test_app_to_app_local() {
         .await
         .expect("Failed to instantiate consumer");
 
-    // TODO: Execute and verify the math operations once fixtures are updated
-    // For now, we've verified that:
-    // 1. Provider instance can be created
-    // 2. Consumer instance can be created with local link to provider
-    // 3. App-to-app wiring is correctly set up
+    // Execute the consumer's run() function, which should internally call
+    // the provider's add() function through the local binding
+    let consumer_component = rt.get_component(consumer_id).expect("Failed to get consumer component");
 
-    // Future work: Execute consumer's run() which should call provider's add()
-    // let result = consumer_inst.exec(|store, inst| { ... }).await;
-    let _ = consumer_inst;
+    let mut results = vec![Val::String(String::new())];
+    consumer_inst
+        .call_interface_func(
+            &consumer_component,
+            "test:demo/runnable",
+            "run",
+            &[],
+            &mut results,
+        )
+        .await
+        .expect("Failed to execute consumer run()");
+
+    // Extract and verify the result
+    let result = match &results[0] {
+        Val::String(s) => s.clone(),
+        _ => panic!("Expected string result from consumer run()"),
+    };
+
+    // The consumer should have called the provider's add() function
+    // and returned a result with the calculation
+    assert!(!result.is_empty(), "Consumer should return a non-empty result");
+    assert_eq!(result, "10 + 5 = 15", "Consumer should return the math result from provider");
 }
 
 // --- Test 6: Stateful System (In-Memory KV) ---
@@ -268,7 +285,7 @@ async fn test_stateful_system() {
         .await
         .expect("Failed to instantiate");
 
-    let instance = exorun::local::LocalInstance::new(store, wasmtime_instance);
+    let instance = exorun::local::LocalInstance::new(store, wasmtime_instance, component.clone());
 
     // TODO: Execute and verify KV operations once fixtures are updated
     // For now, we've verified that:
@@ -344,7 +361,7 @@ async fn test_diamond_dependency() {
         .await
         .expect("Failed to instantiate instance A");
 
-    let inst_a = exorun::local::LocalInstance::new(store_a, wasmtime_instance_a);
+    let inst_a = exorun::local::LocalInstance::new(store_a, wasmtime_instance_a, component.clone());
 
     // Create instance B with same shared KV
     let mut linker_b = Linker::new(rt.engine());
@@ -361,7 +378,7 @@ async fn test_diamond_dependency() {
         .await
         .expect("Failed to instantiate instance B");
 
-    let inst_b = exorun::local::LocalInstance::new(store_b, wasmtime_instance_b);
+    let inst_b = exorun::local::LocalInstance::new(store_b, wasmtime_instance_b, component.clone());
 
     // TODO: Execute both instances and verify shared state once fixtures are updated
     // For now, we've verified that:

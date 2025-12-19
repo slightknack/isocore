@@ -35,12 +35,6 @@
 //! - Crdt, which implements authenticated CRDT types over bundles of writer cores.
 //!
 //! In addition to the standard wasi components for e.g. scoped filesystem access, time, randomness, etc.
-//!
-//! # Example
-//!
-//! ```no_run
-//!
-//! ```
 
 pub mod bind;
 pub mod peer;

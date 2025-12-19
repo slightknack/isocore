@@ -23,15 +23,21 @@ use crate::peer::PeerInstance;
 pub enum Error {
     /// The interface requested for linking was not found in the Ledger.
     InterfaceNotFound(String),
+    /// Interface export not found in component.
+    InterfaceExportNotFound { interface: String },
+    /// Function export not found in interface.
+    FunctionExportNotFound { interface: String, function: String },
     /// Wasmtime linker error (e.g., duplicate definition, shadow disabled).
-    Wasmtime(wasmtime::Error),
+    Linker(wasmtime::Error),
 }
 
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InterfaceNotFound(name) => write!(f, "Interface '{}' not found in Ledger", name),
-            Self::Wasmtime(e) => write!(f, "Wasmtime linker error: {}", e),
+            Self::InterfaceExportNotFound { interface } => { write!(f, "Interface '{}' not found in component exports", interface) }
+            Self::FunctionExportNotFound { interface, function } => { write!(f, "Function '{}' not found in interface '{}'", function, interface) }
+            Self::Linker(e) => write!(f, "Linker error: {}", e),
         }
     }
 }
@@ -59,7 +65,7 @@ impl Binder {
             .ok_or_else(|| Error::InterfaceNotFound(interface_name.to_string()))?;
 
         let mut linker_instance = linker.instance(interface_name)
-            .map_err(Error::Wasmtime)?;
+            .map_err(Error::Linker)?;
 
         for (method_name, signature) in schema.funcs.iter() {
             Binder::peer_method(
@@ -128,7 +134,7 @@ impl Binder {
 
                 Ok(())
             })
-        }).map_err(Error::Wasmtime)?;
+        }).map_err(Error::Linker)?;
 
         Ok(())
     }
@@ -147,14 +153,29 @@ impl Binder {
             .ok_or_else(|| Error::InterfaceNotFound(interface_name.to_string()))?;
 
         let mut linker_instance = linker.instance(interface_name)
-            .map_err(Error::Wasmtime)?;
+            .map_err(Error::Linker)?;
+
+        // Precompute interface export index
+        let inst_idx = target.component
+            .get_export_index(None, interface_name)
+            .ok_or_else(|| Error::InterfaceExportNotFound {
+                interface: interface_name.to_string(),
+            })?;
 
         for (method_name, signature) in schema.funcs.iter() {
+            // Precompute function export index
+            let func_idx = target.component
+                .get_export_index(Some(&inst_idx), method_name)
+                .ok_or_else(|| Error::FunctionExportNotFound {
+                    interface: interface_name.to_string(),
+                    function: method_name.to_string(),
+                })?;
+
             Binder::local_method(
                 &mut linker_instance,
                 method_name,
                 target.clone(),
-                signature.params.len(),
+                func_idx,
                 signature.results.len(),
             )?;
         }
@@ -167,26 +188,21 @@ impl Binder {
         linker_instance: &mut LinkerInstance<ExorunCtx>,
         method_name: &str,
         target: LocalInstance,
-        // TODO: why don't we use param count here?
-        //       do we validate this somewhere else?
-        _param_count: usize,
+        func_idx: wasmtime::component::ComponentExportIndex,
         result_count: usize,
     ) -> Result<()> {
-        let method_name_owned = method_name.to_string();
-
         linker_instance.func_new_async(method_name, move |_store, _func_ty, args, results| {
             let target = target.clone();
-            let method_name = method_name_owned.clone();
+            let func_idx = func_idx.clone();
             let args_vec: Vec<Val> = args.to_vec();
 
             Box::new(async move {
-                // Lock the target instance and call the function
                 let mut guard = target.inner.lock().await;
                 let State { store, instance } = &mut *guard;
 
                 let func = instance
-                    .get_func(&mut *store, &method_name)
-                    .ok_or_else(|| wasmtime::Error::msg(format!("Method '{}' not found", method_name)))?;
+                    .get_func(&mut *store, &func_idx)
+                    .ok_or_else(|| wasmtime::Error::msg("Failed to get function from instance"))?;
 
                 let mut call_results = vec![Val::Bool(false); result_count];
                 func.call_async(&mut *store, &args_vec, &mut call_results)
@@ -206,7 +222,7 @@ impl Binder {
 
                 Ok(())
             })
-        }).map_err(Error::Wasmtime)?;
+        }).map_err(Error::Linker)?;
 
         Ok(())
     }

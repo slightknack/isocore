@@ -146,6 +146,6 @@ impl InstanceBuilder {
             .await
             .map_err(Error::Instantiate)?;
 
-        Ok(LocalInstance::new(store, instance))
+        Ok(LocalInstance::new(store, instance, component))
     }
 }

@@ -9,6 +9,7 @@ use tokio::sync::Mutex;
 use wasmtime::Store;
 use wasmtime::component::Val;
 use wasmtime::component::Instance;
+use wasmtime::component::Component;
 
 use crate::context::ExorunCtx;
 
@@ -45,6 +46,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Clone)]
 pub struct LocalInstance {
     pub(crate) inner: Arc<Mutex<State>>,
+    pub(crate) component: Component,
 }
 
 pub(crate) struct State {
@@ -54,9 +56,10 @@ pub(crate) struct State {
 
 impl LocalInstance {
     /// Creates a new instance handle wrapping the store and instance.
-    pub fn new(store: Store<ExorunCtx>, instance: Instance) -> Self {
+    pub fn new(store: Store<ExorunCtx>, instance: Instance, component: Component) -> Self {
         Self {
             inner: Arc::new(Mutex::new(State { store, instance })),
+            component,
         }
     }
 
