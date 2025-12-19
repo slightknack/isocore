@@ -1,15 +1,10 @@
 //! Integration tests for exorun runtime.
 
-use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
 
-use wasmtime::component::Linker;
 use wasmtime::component::Val;
 
-use exorun::local::InstanceBuilder;
 use exorun::peer::Peer;
-use exorun::context::ExorunCtx;
 use exorun::runtime::Runtime;
 use exorun::host::HostInstance;
 use exorun::host::Wasi;
@@ -62,78 +57,25 @@ async fn test_peer_registration() {
 
 // --- Test 4: System Integration (Logger) ---
 
-#[derive(Clone)]
-struct SysLogger {
-    logs: Arc<Mutex<Vec<String>>>,
-}
-
-impl SysLogger {
-    fn new() -> Self {
-        Self {
-            logs: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    fn get_logs(&self) -> Vec<String> {
-        self.logs.lock().unwrap().clone()
-    }
-
-    fn install(&self, linker: &mut Linker<ExorunCtx>) -> Result<(), exorun::host::Error> {
-        let logs = self.logs.clone();
-
-        let mut instance = linker
-            .instance("test:demo/logging")
-            .map_err(|e| exorun::host::Error::Link(e.to_string()))?;
-
-        instance
-            .func_wrap(
-                "log",
-                move |_caller: wasmtime::StoreContextMut<'_, ExorunCtx>,
-                      (level, msg): (String, String)| {
-                    logs.lock().unwrap().push(format!("[{}] {}", level, msg));
-                    Ok(())
-                },
-            )
-            .map_err(|e| exorun::host::Error::Link(e.to_string()))?;
-
-        Ok(())
-    }
-}
-
 #[tokio::test]
 async fn test_system_integration() {
     let rt = Runtime::new().expect("Failed to create runtime");
-    let logger_sys = SysLogger::new();
+
+    let logger = exorun::host::Logger::new();
 
     let app_id = rt
         .add_component_bytes(&wasm("app_logger"))
         .expect("Failed to register app");
 
-    // Custom systems need manual linker setup for now
-    let component = rt.get_component(app_id).expect("Failed to get component");
-    let mut linker = Linker::new(rt.engine());
-    let mut ctx_builder = exorun::context::ContextBuilder::new();
-
-    HostInstance::Wasi(Wasi::new()).link(&mut linker, &mut ctx_builder).expect("Failed to link WASI");
-    logger_sys.install(&mut linker).expect("Failed to install logger");
-
-    let ctx = ctx_builder.build(rt.clone());
-    let mut store = wasmtime::Store::new(rt.engine(), ctx);
-
-    let wasmtime_instance = linker
-        .instantiate_async(&mut store, &component)
+    let instance_id = rt.instantiate(app_id)
+        .link_system("wasi:cli/environment", HostInstance::Wasi(Wasi::new()))
+        .link_system("exorun:host/logging", HostInstance::Logger(logger.clone()))
+        .build()
         .await
         .expect("Failed to instantiate");
 
-    let instance_id = rt.add_instance(exorun::runtime::InstanceState {
-        component_id: app_id,
-        store,
-        instance: wasmtime_instance,
-        component: component.clone(),
-    });
-
-    // Call the run() function from the test:demo/runnable interface
-    let results = rt.call(instance_id, "test:demo/runnable", "run", &[])
+    // Call the run() function from the exorun:test/runnable interface
+    let results = rt.call(instance_id, "exorun:test/runnable", "run", &[])
         .await
         .expect("Failed to execute run()");
 
@@ -145,7 +87,7 @@ async fn test_system_integration() {
     assert_eq!(result, "Done");
 
     // Verify logs were captured by the system component
-    let logs = logger_sys.get_logs();
+    let logs = logger.get_logs();
     assert_eq!(logs.len(), 1, "Expected exactly one log entry");
     assert_eq!(logs[0], "[INFO] Hello from Wasm!", "Log message mismatch");
 }
@@ -164,21 +106,21 @@ async fn test_app_to_app_local() {
         .expect("Failed to register consumer");
 
     let provider_inst_id = rt.instantiate(provider_id)
-        .link_system("wasi", HostInstance::Wasi(Wasi::new()))
+        .link_system("wasi:cli/environment", HostInstance::Wasi(Wasi::new()))
         .build()
         .await
         .expect("Failed to instantiate provider");
 
     let consumer_inst_id = rt.instantiate(consumer_id)
-        .link_system("wasi", HostInstance::Wasi(Wasi::new()))
-        .link_local("test:demo/math", provider_inst_id)
+        .link_system("wasi:cli/environment", HostInstance::Wasi(Wasi::new()))
+        .link_local("exorun:test/math", provider_inst_id)
         .build()
         .await
         .expect("Failed to instantiate consumer");
 
     // Execute the consumer's run() function, which should internally call
     // the provider's add() function through the local binding
-    let results = rt.call(consumer_inst_id, "test:demo/runnable", "run", &[])
+    let results = rt.call(consumer_inst_id, "exorun:test/runnable", "run", &[])
         .await
         .expect("Failed to execute consumer run()");
 
@@ -196,89 +138,25 @@ async fn test_app_to_app_local() {
 
 // --- Test 6: Stateful System (In-Memory KV) ---
 
-#[derive(Clone)]
-struct InMemoryKv {
-    store: Arc<Mutex<HashMap<String, String>>>,
-}
-
-impl InMemoryKv {
-    fn new() -> Self {
-        Self {
-            store: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    fn install(&self, linker: &mut Linker<ExorunCtx>) -> Result<(), exorun::host::Error> {
-        let store = self.store.clone();
-
-        let mut instance = linker
-            .instance("test:demo/kv")
-            .map_err(|e| exorun::host::Error::Link(e.to_string()))?;
-
-        // Bind the 'get' function
-        instance
-            .func_wrap(
-                "get",
-                {
-                    let store = store.clone();
-                    move |_caller: wasmtime::StoreContextMut<'_, ExorunCtx>, (key,): (String,)| {
-                        let value = store.lock().unwrap().get(&key).cloned();
-                        Ok((value,))
-                    }
-                },
-            )
-            .map_err(|e| exorun::host::Error::Link(e.to_string()))?;
-
-        // Bind the 'set' function
-        instance
-            .func_wrap(
-                "set",
-                move |_caller: wasmtime::StoreContextMut<'_, ExorunCtx>,
-                      (key, val): (String, String)| {
-                    store.lock().unwrap().insert(key, val);
-                    Ok(())
-                },
-            )
-            .map_err(|e| exorun::host::Error::Link(e.to_string()))?;
-
-        Ok(())
-    }
-}
-
 #[tokio::test]
 async fn test_stateful_system() {
     let rt = Runtime::new().expect("Failed to create runtime");
-    let kv_sys = InMemoryKv::new();
+
+    let kv = exorun::host::Kv::new();
 
     let app_id = rt
         .add_component_bytes(&wasm("app_kv"))
         .expect("Failed to register app");
 
-    // Custom systems need manual linker setup for now
-    let component = rt.get_component(app_id).expect("Failed to get component");
-    let mut linker = Linker::new(rt.engine());
-    let mut ctx_builder = exorun::context::ContextBuilder::new();
-
-    HostInstance::Wasi(Wasi::new()).link(&mut linker, &mut ctx_builder).expect("Failed to link WASI");
-    kv_sys.install(&mut linker).expect("Failed to install kv");
-
-    let ctx = ctx_builder.build(rt.clone());
-    let mut store = wasmtime::Store::new(rt.engine(), ctx);
-
-    let wasmtime_instance = linker
-        .instantiate_async(&mut store, &component)
+    let instance_id = rt.instantiate(app_id)
+        .link_system("wasi:cli/environment", HostInstance::Wasi(Wasi::new()))
+        .link_system("exorun:host/kv", HostInstance::Kv(kv.clone()))
+        .build()
         .await
         .expect("Failed to instantiate");
 
-    let instance_id = rt.add_instance(exorun::runtime::InstanceState {
-        component_id: app_id,
-        store,
-        instance: wasmtime_instance,
-        component: component.clone(),
-    });
-
     // Execute the run() function which should set/get values in KV
-    let results = rt.call(instance_id, "test:demo/runnable", "run", &[])
+    let results = rt.call(instance_id, "exorun:test/runnable", "run", &[])
         .await
         .expect("Failed to execute run()");
 
@@ -292,7 +170,7 @@ async fn test_stateful_system() {
     assert!(!result.is_empty(), "KV app should return a non-empty result");
 
     // Verify the KV store has data
-    let kv_store = kv_sys.store.lock().unwrap();
+    let kv_store = kv.get_store();
     assert!(!kv_store.is_empty(), "KV store should contain data after execution");
 }
 
@@ -377,9 +255,9 @@ async fn test_remote_peer_mock() {
         .expect("Failed to register app");
 
     let instance_id = rt.instantiate(app_id)
-        .link_system("wasi", HostInstance::Wasi(Wasi::new()))
+        .link_system("wasi:cli/environment", HostInstance::Wasi(Wasi::new()))
         .link_remote(
-            "test:demo/math",
+            "exorun:test/math",
             peer_id.get_instance("math-service-on-mars"),
         )
         .build()
@@ -387,7 +265,7 @@ async fn test_remote_peer_mock() {
         .expect("Failed to instantiate");
 
     // Execute run() which should make a remote call to the math service
-    let results = rt.call(instance_id, "test:demo/runnable", "run", &[])
+    let results = rt.call(instance_id, "exorun:test/runnable", "run", &[])
         .await
         .expect("Failed to execute run()");
 
@@ -407,60 +285,31 @@ async fn test_remote_peer_mock() {
 #[tokio::test]
 async fn test_diamond_dependency() {
     let rt = Runtime::new().expect("Failed to create runtime");
-    let shared_kv = InMemoryKv::new();
+
+    let shared_kv = exorun::host::Kv::new();
 
     let app_id = rt
         .add_component_bytes(&wasm("app_kv"))
         .expect("Failed to register app");
 
-    let component = rt.get_component(app_id).expect("Failed to get component");
-
     // Create instance A with shared KV
-    let mut linker_a = Linker::new(rt.engine());
-    let mut ctx_builder_a = exorun::context::ContextBuilder::new();
-
-    HostInstance::Wasi(Wasi::new()).link(&mut linker_a, &mut ctx_builder_a).expect("Failed to link WASI");
-    shared_kv.install(&mut linker_a).expect("Failed to install kv");
-
-    let ctx_a = ctx_builder_a.build(rt.clone());
-    let mut store_a = wasmtime::Store::new(rt.engine(), ctx_a);
-
-    let wasmtime_instance_a = linker_a
-        .instantiate_async(&mut store_a, &component)
+    let inst_a_id = rt.instantiate(app_id)
+        .link_system("wasi:cli/environment", HostInstance::Wasi(Wasi::new()))
+        .link_system("exorun:host/kv", HostInstance::Kv(shared_kv.clone()))
+        .build()
         .await
         .expect("Failed to instantiate instance A");
 
-    let inst_a_id = rt.add_instance(exorun::runtime::InstanceState {
-        component_id: app_id,
-        store: store_a,
-        instance: wasmtime_instance_a,
-        component: component.clone(),
-    });
-
     // Create instance B with same shared KV
-    let mut linker_b = Linker::new(rt.engine());
-    let mut ctx_builder_b = exorun::context::ContextBuilder::new();
-
-    HostInstance::Wasi(Wasi::new()).link(&mut linker_b, &mut ctx_builder_b).expect("Failed to link WASI");
-    shared_kv.install(&mut linker_b).expect("Failed to install kv");
-
-    let ctx_b = ctx_builder_b.build(rt.clone());
-    let mut store_b = wasmtime::Store::new(rt.engine(), ctx_b);
-
-    let wasmtime_instance_b = linker_b
-        .instantiate_async(&mut store_b, &component)
+    let inst_b_id = rt.instantiate(app_id)
+        .link_system("wasi:cli/environment", HostInstance::Wasi(Wasi::new()))
+        .link_system("exorun:host/kv", HostInstance::Kv(shared_kv.clone()))
+        .build()
         .await
         .expect("Failed to instantiate instance B");
 
-    let inst_b_id = rt.add_instance(exorun::runtime::InstanceState {
-        component_id: app_id,
-        store: store_b,
-        instance: wasmtime_instance_b,
-        component: component.clone(),
-    });
-
     // Execute instance A - it should write to the shared KV
-    let results_a = rt.call(inst_a_id, "test:demo/runnable", "run", &[])
+    let results_a = rt.call(inst_a_id, "exorun:test/runnable", "run", &[])
         .await
         .expect("Failed to execute instance A run()");
 
@@ -470,7 +319,7 @@ async fn test_diamond_dependency() {
     };
 
     // Execute instance B - it should also write to the shared KV
-    let results_b = rt.call(inst_b_id, "test:demo/runnable", "run", &[])
+    let results_b = rt.call(inst_b_id, "exorun:test/runnable", "run", &[])
         .await
         .expect("Failed to execute instance B run()");
 
@@ -484,7 +333,7 @@ async fn test_diamond_dependency() {
     assert!(!result_b.is_empty(), "Instance B should return a non-empty result");
 
     // Verify the shared KV store contains data from both instances
-    let kv_store = shared_kv.store.lock().unwrap();
+    let kv_store = shared_kv.get_store();
     assert!(!kv_store.is_empty(), "Shared KV store should contain data from both instances");
     
     // The diamond dependency test verifies:

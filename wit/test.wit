@@ -1,0 +1,34 @@
+package exorun:test;
+
+// Math Service (App-to-App)
+interface math {
+    add: func(a: u32, b: u32) -> u32;
+}
+
+// Runner interface - entry point for tests
+interface runnable {
+    run: func() -> string;
+}
+
+// World for an app that provides math
+world math-provider {
+    export math;
+}
+
+// World for an app that consumes math
+world math-consumer {
+    import math;
+    export runnable;
+}
+
+// World for an app that logs
+world logger-client {
+    import exorun:host/logging;
+    export runnable;
+}
+
+// World for an app that uses KV
+world kv-client {
+    import exorun:host/kv;
+    export runnable;
+}

@@ -1,0 +1,10 @@
+package exorun:host;
+
+interface logging {
+    log: func(level: string, msg: string);
+}
+
+interface kv {
+    get: func(key: string) -> option<string>;
+    set: func(key: string, val: string);
+}

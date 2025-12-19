@@ -41,7 +41,7 @@ impl TestLogger {
         let logs = self.logs.clone();
 
         let mut instance = linker
-            .instance("test:demo/logging")
+            .instance("exorun:host/logging")
             .map_err(|e| exorun::host::Error::Link(e.to_string()))?;
 
         instance
@@ -95,15 +95,15 @@ async fn test_low_level_component_export_navigation() {
         .await
         .expect("Failed to instantiate");
 
-    // Get the exported "test:demo/runnable" interface - it's exported as an instance
+    // Get the exported "exorun:test/runnable" interface - it's exported as an instance
     let runnable_export = instance
-        .get_export(&mut store, None, "test:demo/runnable")
+        .get_export(&mut store, None, "exorun:test/runnable")
         .expect("Failed to get runnable export");
 
     // The export is a ComponentInstance (nested export)
     let (item, idx) = runnable_export;
     let ComponentItem::ComponentInstance(_inst_ty) = item else {
-        panic!("Expected test:demo/runnable to be a ComponentInstance");
+        panic!("Expected exorun:test/runnable to be a ComponentInstance");
     };
 
     // To get a function from within an exported instance, we need to:

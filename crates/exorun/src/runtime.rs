@@ -20,6 +20,7 @@ use wasmtime::component::Component;
 use wasmtime::component::Instance;
 use wasmtime::component::Val;
 
+use crate::local::InstanceBuilder;
 use crate::peer::Peer;
 use crate::peer::PeerInstance;
 use crate::context::ExorunCtx;
@@ -183,9 +184,9 @@ impl Runtime {
 
     /// Registers an instance and returns its unique ID.
     ///
-    /// Note: This is public for advanced use cases (e.g., custom system components),
-    /// but most users should use `Runtime::instantiate()` instead.
-    pub fn add_instance(&self, state: InstanceState) -> InstanceId {
+    /// This is an internal API used by the InstanceBuilder.
+    /// Users should use `Runtime::instantiate()` instead.
+    pub(crate) fn add_instance(&self, state: InstanceState) -> InstanceId {
         let id = InstanceId(self.next_instance_id.fetch_add(1, Ordering::Relaxed));
         self.instances.insert(id, Arc::new(Mutex::new(state)));
         id
@@ -193,8 +194,8 @@ impl Runtime {
 
     /// Creates an instance builder for the given component.
     /// This is the primary way to instantiate components.
-    pub fn instantiate(self: &Arc<Self>, component_id: ComponentId) -> crate::local::InstanceBuilder {
-        crate::local::InstanceBuilder::new(Arc::clone(self), component_id)
+    pub fn instantiate(self: &Arc<Self>, component_id: ComponentId) -> InstanceBuilder {
+        InstanceBuilder::new(Arc::clone(self), component_id)
     }
 
     /// Calls an exported function on an instance.

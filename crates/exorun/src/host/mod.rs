@@ -8,9 +8,13 @@
 
 pub mod instance;
 pub mod wasi;
+pub mod logger;
+pub mod kv;
 
 pub use instance::HostInstance;
 pub use wasi::Wasi;
+pub use logger::Logger;
+pub use kv::Kv;
 
 #[derive(Debug)]
 pub enum Error {

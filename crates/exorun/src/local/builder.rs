@@ -64,7 +64,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Linking strategy for an interface.
 pub enum Link {
-    System { interface: String, instance: HostInstance  },
+    System { interface: String, instance: HostInstance },
     Local  { interface: String, instance: InstanceId },
     Remote { interface: String, instance: PeerInstance  },
 }
@@ -127,8 +127,10 @@ impl InstanceBuilder {
         // Process links (consuming them to transfer ownership)
         for link in self.links {
             match link {
-                Link::System { interface: _, instance: target } => {
-                    target.link(&mut linker, &mut self.context_builder)?;
+                Link::System { interface, instance: host_instance } => {
+                    // Validate that the host instance can provide this interface
+                    host_instance.validate_interface(&interface)?;
+                    host_instance.link(&mut linker, &mut self.context_builder)?;
                 }
                 Link::Local { interface, instance: target } => {
                     Binder::local_interface(&mut linker, &ledger, &interface, target)?;

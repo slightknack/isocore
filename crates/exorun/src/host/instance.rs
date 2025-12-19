@@ -9,6 +9,8 @@ use crate::context::ContextBuilder;
 use crate::context::ExorunCtx;
 use crate::host::Result;
 use crate::host::Wasi;
+use crate::host::Logger;
+use crate::host::Kv;
 
 /// Exhaustive enum of all system components supported by the runtime.
 ///
@@ -19,9 +21,36 @@ pub enum HostInstance {
     /// Standard WASI (WebAssembly System Interface) functionality.
     /// Provides filesystem, stdio, environment variables, etc.
     Wasi(Wasi),
+    /// Logger system component for capturing log messages.
+    /// Provides the `exorun:host/logging` interface.
+    Logger(Logger),
+    /// Key-Value store system component for in-memory storage.
+    /// Provides the `exorun:host/kv` interface.
+    Kv(Kv),
 }
 
 impl HostInstance {
+    /// Validates that this host instance can provide the specified interface.
+    ///
+    /// For WASI, any interface starting with "wasi:" is accepted since WASI
+    /// provides many interfaces via a single `add_to_linker` call.
+    /// For other host instances, the interface must match exactly.
+    pub fn validate_interface(&self, interface: &str) -> Result<()> {
+        let (name, expected) = match self {
+            HostInstance::Wasi(_) if interface.starts_with("wasi:") => return Ok(()),
+            HostInstance::Wasi(_) => ("WASI", "wasi:*"),
+            HostInstance::Logger(_) if interface == "exorun:host/logging" => return Ok(()),
+            HostInstance::Logger(_) => ("Logger", "exorun:host/logging"),
+            HostInstance::Kv(_) if interface == "exorun:host/kv" => return Ok(()),
+            HostInstance::Kv(_) => ("Kv", "exorun:host/kv"),
+        };
+
+        Err(crate::host::Error::Link(format!(
+            "{} host instance cannot provide interface '{}' (expected '{}')",
+            name, interface, expected
+        )))
+    }
+
     /// Links this system component to the linker and context builder.
     ///
     /// This performs both installation (adding host functions to the linker)
@@ -34,16 +63,8 @@ impl HostInstance {
     ) -> Result<()> {
         match self {
             HostInstance::Wasi(wasi) => wasi.link(linker),
-        }
-    }
-
-    /// Returns the WIT interface name that this system component provides.
-    ///
-    /// For WASI, this returns None since WASI interfaces are implicitly known
-    /// and don't follow the standard interface naming convention.
-    pub fn interface_name(&self) -> Option<&str> {
-        match self {
-            HostInstance::Wasi(_) => None, // WASI is special
+            HostInstance::Logger(logger) => logger.link(linker),
+            HostInstance::Kv(kv) => kv.link(linker),
         }
     }
 }
