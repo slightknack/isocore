@@ -35,10 +35,10 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::InterfaceNotFound(name) => write!(f, "Interface '{}' not found in Ledger", name),
-            Self::InterfaceExportNotFound { interface } => { write!(f, "Interface '{}' not found in component exports", interface) }
-            Self::FunctionExportNotFound { interface, function } => { write!(f, "Function '{}' not found in interface '{}'", function, interface) }
-            Self::Linker(e) => write!(f, "Linker error: {}", e),
+            Self::InterfaceNotFound(name) => write!(f, "interface '{}' not found in ledger", name),
+            Self::InterfaceExportNotFound { interface } => write!(f, "interface '{}' not found in component exports", interface),
+            Self::FunctionExportNotFound { interface, function } => write!(f, "function '{}' not found in interface '{}'", function, interface),
+            Self::Linker(e) => write!(f, "linker error: {}", e),
         }
     }
 }

@@ -25,8 +25,8 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Link(msg) => write!(f, "Linker error: {}", msg),
-            Self::Wasmtime(e) => write!(f, "Wasmtime error: {}", e),
+            Self::Link(msg) => write!(f, "link error: {}", msg),
+            Self::Wasmtime(e) => write!(f, "wasmtime error: {}", e),
         }
     }
 }

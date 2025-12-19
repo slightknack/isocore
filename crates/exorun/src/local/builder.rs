@@ -10,6 +10,7 @@ use wasmtime::Store;
 use crate::bind;
 use crate::bind::Binder;
 use crate::context::ContextBuilder;
+use crate::ledger;
 use crate::runtime;
 use crate::runtime::ComponentId;
 use crate::runtime::InstanceId;
@@ -24,6 +25,7 @@ pub enum Error {
     Runtime(runtime::Error),
     Host(host::Error),
     Bind(bind::Error),
+    Ledger(ledger::Error),
     Linker(wasmtime::Error),
     Instantiate(wasmtime::Error),
 }
@@ -31,11 +33,12 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Runtime(e) => write!(f, "Runtime error: {}", e),
-            Self::Host(e) => write!(f, "System error: {}", e),
-            Self::Bind(e) => write!(f, "Bind error: {}", e),
-            Self::Linker(e) => write!(f, "Linker error: {}", e),
-            Self::Instantiate(e) => write!(f, "Instantiate error: {}", e),
+            Self::Runtime(e) => write!(f, "runtime error: {}", e),
+            Self::Host(e) => write!(f, "host error: {}", e),
+            Self::Bind(e) => write!(f, "bind error: {}", e),
+            Self::Ledger(e) => write!(f, "ledger error: {}", e),
+            Self::Linker(e) => write!(f, "linker error: {}", e),
+            Self::Instantiate(e) => write!(f, "instantiate error: {}", e),
         }
     }
 }
@@ -57,6 +60,12 @@ impl From<host::Error> for Error {
 impl From<bind::Error> for Error {
     fn from(e: bind::Error) -> Self {
         Self::Bind(e)
+    }
+}
+
+impl From<ledger::Error> for Error {
+    fn from(e: ledger::Error) -> Self {
+        Self::Ledger(e)
     }
 }
 
@@ -113,8 +122,7 @@ impl InstanceBuilder {
 
     pub async fn build(mut self) -> Result<InstanceId> {
         let component = self.runtime.get_component(self.component_id)?;
-        let ledger = crate::ledger::Ledger::from_component(&component)
-            .map_err(|e| Error::Linker(wasmtime::Error::msg(e.to_string())))?;
+        let ledger = ledger::Ledger::from_component(&component)?;
 
         let mut linker = Linker::new(self.runtime.engine());
 

@@ -42,15 +42,13 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Transport(e) => write!(f, "Transport error: {}", e),
-            Self::NeoRpc(e) => write!(f, "RPC error: {}", e),
-            Self::NeoPack(e) => write!(f, "NeoPack error: {}", e),
-            Self::Remote(reason) => write!(f, "Remote failure: {:?}", reason),
-            Self::Timeout => write!(f, "Request timed out"),
-            Self::ChannelClosed => write!(f, "Response channel closed"),
-            Self::SequenceMismatch { expected, received } => {
-                write!(f, "Sequence mismatch: expected {}, received {}", expected, received)
-            }
+            Self::Transport(e) => write!(f, "transport error: {}", e),
+            Self::NeoRpc(e) => write!(f, "rpc error: {}", e),
+            Self::NeoPack(e) => write!(f, "neopack error: {}", e),
+            Self::Remote(reason) => write!(f, "remote failure: {:?}", reason),
+            Self::Timeout => write!(f, "request timed out"),
+            Self::ChannelClosed => write!(f, "response channel closed"),
+            Self::SequenceMismatch { expected, received } => write!(f, "sequence mismatch: expected {}, received {}", expected, received),
         }
     }
 }

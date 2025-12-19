@@ -30,10 +30,10 @@ pub enum Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ConnectionLost(msg) => write!(f, "Connection lost: {}", msg),
-            Self::Timeout => write!(f, "Request timed out"),
-            Self::PayloadTooLarge => write!(f, "Payload too large for transport"),
-            Self::Io(msg) => write!(f, "I/O error: {}", msg),
+            Self::ConnectionLost(msg) => write!(f, "connection lost: {}", msg),
+            Self::Timeout => write!(f, "request timed out"),
+            Self::PayloadTooLarge => write!(f, "payload too large for transport"),
+            Self::Io(msg) => write!(f, "i/o error: {}", msg),
         }
     }
 }

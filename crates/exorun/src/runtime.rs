@@ -76,6 +76,9 @@ pub enum Error {
     ComponentNotFound(ComponentId),
     PeerNotFound(PeerId),
     InstanceNotFound(InstanceId),
+    InterfaceNotFound { interface: String },
+    FunctionNotFound { interface: String, function: String },
+    FunctionLookupFailed,
     Engine(wasmtime::Error),
     Component(wasmtime::Error),
 }
@@ -83,11 +86,14 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ComponentNotFound(id) => write!(f, "Component not found: {}", id),
-            Self::PeerNotFound(id) => write!(f, "Peer not found: {}", id),
-            Self::InstanceNotFound(id) => write!(f, "Instance not found: {}", id),
-            Self::Engine(e) => write!(f, "Engine error: {}", e),
-            Self::Component(e) => write!(f, "Component error: {}", e),
+            Self::ComponentNotFound(id) => write!(f, "component not found: {}", id),
+            Self::PeerNotFound(id) => write!(f, "peer not found: {}", id),
+            Self::InstanceNotFound(id) => write!(f, "instance not found: {}", id),
+            Self::InterfaceNotFound { interface } => write!(f, "interface '{}' not found", interface),
+            Self::FunctionNotFound { interface, function } => write!(f, "function '{}' not found in interface '{}'", function, interface),
+            Self::FunctionLookupFailed => write!(f, "failed to get function from instance"),
+            Self::Engine(e) => write!(f, "engine error: {}", e),
+            Self::Component(e) => write!(f, "component error: {}", e),
         }
     }
 }
@@ -222,22 +228,21 @@ impl Runtime {
         // Get export indices
         let inst_idx = component
             .get_export_index(None, interface)
-            .ok_or_else(|| Error::Component(
-                wasmtime::Error::msg(format!("Interface '{}' not found", interface))
-            ))?;
+            .ok_or_else(|| Error::InterfaceNotFound {
+                interface: interface.to_string()
+            })?;
 
         let func_idx = component
             .get_export_index(Some(&inst_idx), function)
-            .ok_or_else(|| Error::Component(
-                wasmtime::Error::msg(format!("Function '{}' not found in interface '{}'", function, interface))
-            ))?;
+            .ok_or_else(|| Error::FunctionNotFound {
+                interface: interface.to_string(),
+                function: function.to_string()
+            })?;
 
         // Get function from instance
         let func = instance
             .get_func(&mut *store, &func_idx)
-            .ok_or_else(|| Error::Component(
-                wasmtime::Error::msg("Failed to get function".to_string())
-            ))?;
+            .ok_or(Error::FunctionLookupFailed)?;
 
         // Determine result count from function type
         let func_ty = func.ty(&mut *store);

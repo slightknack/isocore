@@ -36,16 +36,12 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::ResourceNotWireSafe => write!(f, "Resources cannot cross network boundaries"),
-            Error::FutureNotWireSafe => write!(f, "Futures cannot cross network boundaries"),
-            Error::StreamNotWireSafe => write!(f, "Streams cannot cross network boundaries"),
-            Error::ErrorContextNotWireSafe => write!(f, "Error Contexts cannot cross network boundaries"),
-            Error::InvalidParameter { import_name, details } => {
-                write!(f, "Import '{}' is not wire-safe: parameter contains forbidden type: {}", import_name, details)
-            }
-            Error::InvalidResult { import_name, details } => {
-                write!(f, "Import '{}' is not wire-safe: result contains forbidden type: {}", import_name, details)
-            }
+            Error::ResourceNotWireSafe => write!(f, "resources cannot cross network boundaries"),
+            Error::FutureNotWireSafe => write!(f, "futures cannot cross network boundaries"),
+            Error::StreamNotWireSafe => write!(f, "streams cannot cross network boundaries"),
+            Error::ErrorContextNotWireSafe => write!(f, "error contexts cannot cross network boundaries"),
+            Error::InvalidParameter { import_name, details } => write!(f, "import '{}' is not wire-safe: parameter contains forbidden type: {}", import_name, details),
+            Error::InvalidResult { import_name, details } => write!(f, "import '{}' is not wire-safe: result contains forbidden type: {}", import_name, details),
         }
     }
 }
