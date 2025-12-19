@@ -287,15 +287,32 @@ async fn test_stateful_system() {
 
     let instance = exorun::local::LocalInstance::new(store, wasmtime_instance, component.clone());
 
-    // TODO: Execute and verify KV operations once fixtures are updated
-    // For now, we've verified that:
-    // 1. Instance can be created with stateful system component
-    // 2. InMemoryKv system is properly linked
+    // Execute the run() function which should set/get values in KV
+    use wasmtime::component::Val;
+    let mut results = vec![Val::String(String::new())];
+    instance
+        .call_interface_func(
+            &component,
+            "test:demo/runnable",
+            "run",
+            &[],
+            &mut results,
+        )
+        .await
+        .expect("Failed to execute run()");
 
-    // Future work: Execute run() which should set/get values in KV
-    // let result = instance.exec(|store, inst| { ... }).await;
-    let _kv_store = kv_sys.store.lock().unwrap();
-    let _ = instance;
+    // Extract the result
+    let result = match &results[0] {
+        Val::String(s) => s.clone(),
+        _ => panic!("Expected string result from run()"),
+    };
+
+    // Verify the KV operations worked
+    assert!(!result.is_empty(), "KV app should return a non-empty result");
+    
+    // Verify the KV store has data
+    let kv_store = kv_sys.store.lock().unwrap();
+    assert!(!kv_store.is_empty(), "KV store should contain data after execution");
 }
 
 // --- Test 7: Remote Peer (Mock Transport) ---
