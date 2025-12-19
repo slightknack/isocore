@@ -8,7 +8,6 @@
 //! Uses DashMap for concurrent access without global locking, enabling high-throughput
 //! scenarios where multiple tasks register apps or spawn instances simultaneously.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -18,10 +17,10 @@ use tokio::sync::Mutex;
 use wasmtime::Engine;
 use wasmtime::Store;
 use wasmtime::component::Component;
-use wasmtime::component::ComponentExportIndex;
 use wasmtime::component::Instance;
 use wasmtime::component::Val;
 
+use crate::ledger::Ledger;
 use crate::local::InstanceBuilder;
 use crate::peer::Peer;
 use crate::peer::PeerInstance;
@@ -122,8 +121,6 @@ pub struct InstanceState {
     pub component_id: ComponentId,
     pub store: Store<ExorunCtx>,
     pub instance: Instance,
-    pub component: Component,
-    pub export_indices: BTreeMap<String, BTreeMap<String, ComponentExportIndex>>,
 }
 
 /// The central runtime for managing Wasm components and their instances.
@@ -137,7 +134,7 @@ pub struct Runtime {
     pub(crate) engine: Engine,
     pub(crate) peers: DashMap<PeerId, Arc<Peer>>,
     pub(crate) components: DashMap<ComponentId, Component>,
-    pub(crate) ledgers: DashMap<ComponentId, ledger::Ledger>,
+    pub(crate) ledgers: DashMap<ComponentId, Ledger>,
     pub(crate) instances: DashMap<InstanceId, Arc<Mutex<InstanceState>>>,
     next_peer_id: AtomicU64,
     next_component_id: AtomicU64,
@@ -197,7 +194,7 @@ impl Runtime {
     ///
     /// Creates and stores a ledger for the component, capturing both imports and exports.
     pub fn add_component(&self, component: Component) -> Result<ComponentId> {
-        let ledger = ledger::Ledger::from_component(&component)?;
+        let ledger = Ledger::from_component(&component)?;
         let id = ComponentId(self.next_component_id.fetch_add(1, Ordering::Relaxed));
         self.components.insert(id, component);
         self.ledgers.insert(id, ledger);
@@ -213,7 +210,7 @@ impl Runtime {
     }
 
     /// Retrieves a ledger by component ID.
-    pub fn get_ledger(&self, id: ComponentId) -> Result<ledger::Ledger> {
+    pub fn get_ledger(&self, id: ComponentId) -> Result<Ledger> {
         self.ledgers
             .get(&id)
             .map(|entry| entry.value().clone())
@@ -253,25 +250,28 @@ impl Runtime {
             .ok_or(Error::InstanceNotFound(instance_id))?;
 
         let mut state = state_arc.lock().await;
-        let InstanceState { instance, store, export_indices, .. } = &mut *state;
+        let InstanceState { component_id, instance, store } = &mut *state;
 
-        // Two-level lookup - no string allocations
-        let interface_map = export_indices
-            .get(interface)
+        // Get component to lookup export indices
+        let component = self.get_component(*component_id)?;
+
+        // Get export indices
+        let inst_idx = component
+            .get_export_index(None, interface)
             .ok_or_else(|| Error::InterfaceNotFound {
-                interface: interface.to_string(),
+                interface: interface.to_string()
             })?;
-        
-        let func_idx = interface_map
-            .get(function)
+
+        let func_idx = component
+            .get_export_index(Some(&inst_idx), function)
             .ok_or_else(|| Error::FunctionNotFound {
                 interface: interface.to_string(),
-                function: function.to_string(),
+                function: function.to_string()
             })?;
 
         // Get function from instance
         let func = instance
-            .get_func(&mut *store, func_idx)
+            .get_func(&mut *store, &func_idx)
             .ok_or(Error::FunctionLookupFailed)?;
 
         // Determine result count from function type

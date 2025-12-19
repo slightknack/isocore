@@ -87,7 +87,7 @@ async fn test_system_integration() {
     assert_eq!(result, "Done");
 
     // Verify logs were captured by the system component
-    let logs = logger.get_logs();
+    let logs = logger.get_logs().await;
     assert_eq!(logs.len(), 1, "Expected exactly one log entry");
     assert_eq!(logs[0], "[INFO] Hello from Wasm!", "Log message mismatch");
 }
@@ -170,7 +170,7 @@ async fn test_stateful_system() {
     assert!(!result.is_empty(), "KV app should return a non-empty result");
 
     // Verify the KV store has data
-    let kv_store = kv.get_store();
+    let kv_store = kv.get_store().await;
     assert!(!kv_store.is_empty(), "KV store should contain data after execution");
 }
 
@@ -333,7 +333,7 @@ async fn test_diamond_dependency() {
     assert!(!result_b.is_empty(), "Instance B should return a non-empty result");
 
     // Verify the shared KV store contains data from both instances
-    let kv_store = shared_kv.get_store();
+    let kv_store = shared_kv.get_store().await;
     assert!(!kv_store.is_empty(), "Shared KV store should contain data from both instances");
     
     // The diamond dependency test verifies:

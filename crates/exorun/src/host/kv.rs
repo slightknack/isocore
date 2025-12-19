@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::Mutex;
 
+use tokio::sync::Mutex;
 use wasmtime::component::Linker;
 
 use crate::context::ExorunCtx;
@@ -30,8 +30,8 @@ impl Kv {
     }
 
     /// Returns a snapshot of all key-value pairs in the store.
-    pub fn get_store(&self) -> HashMap<String, String> {
-        self.store.lock().unwrap().clone()
+    pub async fn get_store(&self) -> HashMap<String, String> {
+        self.store.lock().await.clone()
     }
 
     /// Links this KV store to the linker, installing the `exorun:host/kv` interface.
@@ -49,7 +49,9 @@ impl Kv {
                 {
                     let store = store.clone();
                     move |_caller: wasmtime::StoreContextMut<'_, ExorunCtx>, (key,): (String,)| {
-                        let value = store.lock().unwrap().get(&key).cloned();
+                        let guard = store.try_lock()
+                            .map_err(|_| wasmtime::Error::msg("kv mutex contention"))?;
+                        let value = guard.get(&key).cloned();
                         Ok((value,))
                     }
                 },
@@ -62,7 +64,9 @@ impl Kv {
                 "set",
                 move |_caller: wasmtime::StoreContextMut<'_, ExorunCtx>,
                       (key, val): (String, String)| {
-                    store.lock().unwrap().insert(key, val);
+                    let mut guard = store.try_lock()
+                        .map_err(|_| wasmtime::Error::msg("kv mutex contention"))?;
+                    guard.insert(key, val);
                     Ok(())
                 },
             )

@@ -2,11 +2,9 @@
 //!
 //! Provides a fluent API for composing an instance with various linking strategies.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use wasmtime::component::Linker;
-use wasmtime::component::ComponentExportIndex;
 use wasmtime::Store;
 
 use crate::bind;
@@ -157,15 +155,10 @@ impl InstanceBuilder {
             .await
             .map_err(Error::Instantiate)?;
 
-        // Pre-compute export indices for fast runtime.call()
-        let export_indices = build_export_indices(&component, &my_ledger.exports)?;
-
         let state = InstanceState {
             component_id: self.component_id,
             store,
             instance,
-            component,
-            export_indices,
         };
 
         let instance_id = self.runtime.add_instance(state);
@@ -206,42 +199,4 @@ impl InstanceBuilder {
         
         Ok(())
     }
-}
-
-/// Builds a two-level map of export indices for all exported functions.
-///
-/// Uses BTreeMap for O(log n) lookup without string allocation on the hot path.
-fn build_export_indices(
-    component: &wasmtime::component::Component,
-    exports: &std::collections::HashMap<String, ledger::InterfaceSchema>,
-) -> Result<BTreeMap<String, BTreeMap<String, ComponentExportIndex>>> {
-    
-    let mut indices = BTreeMap::new();
-    
-    for (interface_name, interface_schema) in exports {
-        // Get the interface export index
-        let inst_idx = component
-            .get_export_index(None, interface_name)
-            .ok_or_else(|| ledger::Error::InvalidResult {
-                import_name: interface_name.clone(),
-                details: "interface not found in component exports".to_string(),
-            })?;
-        
-        let mut func_indices = BTreeMap::new();
-        for func_name in interface_schema.funcs.keys() {
-            // Get the function export index within the interface
-            let func_idx = component
-                .get_export_index(Some(&inst_idx), func_name)
-                .ok_or_else(|| ledger::Error::InvalidResult {
-                    import_name: format!("{}#{}", interface_name, func_name),
-                    details: "function not found in interface exports".to_string(),
-                })?;
-            
-            func_indices.insert(func_name.clone(), func_idx);
-        }
-        
-        indices.insert(interface_name.clone(), func_indices);
-    }
-    
-    Ok(indices)
 }

@@ -4,8 +4,8 @@
 //! Captures log messages in memory for testing and inspection.
 
 use std::sync::Arc;
-use std::sync::Mutex;
 
+use tokio::sync::Mutex;
 use wasmtime::component::Linker;
 
 use crate::context::ExorunCtx;
@@ -29,8 +29,8 @@ impl Logger {
     }
 
     /// Returns all captured log messages.
-    pub fn get_logs(&self) -> Vec<String> {
-        self.logs.lock().unwrap().clone()
+    pub async fn get_logs(&self) -> Vec<String> {
+        self.logs.lock().await.clone()
     }
 
     /// Links this logger to the linker, installing the `exorun:host/logging` interface.
@@ -46,7 +46,9 @@ impl Logger {
                 "log",
                 move |_caller: wasmtime::StoreContextMut<'_, ExorunCtx>,
                       (level, msg): (String, String)| {
-                    logs.lock().unwrap().push(format!("[{}] {}", level, msg));
+                    let mut guard = logs.try_lock()
+                        .map_err(|_| wasmtime::Error::msg("logger mutex contention"))?;
+                    guard.push(format!("[{}] {}", level, msg));
                     Ok(())
                 },
             )
