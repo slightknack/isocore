@@ -126,19 +126,16 @@ async fn test_system_integration() {
         .await
         .expect("Failed to instantiate");
 
-    let instance = exorun::local::LocalInstance::new(store, wasmtime_instance, component.clone());
+    // Add instance to runtime
+    let instance_id = rt.add_instance(exorun::runtime::InstanceState {
+        component_id: app_id,
+        store,
+        instance: wasmtime_instance,
+        component: component.clone(),
+    });
 
     // Call the run() function from the test:demo/runnable interface
-    use wasmtime::component::Val;
-    let mut results = vec![Val::String(String::new())];
-    instance
-        .call_interface_func(
-            &component,
-            "test:demo/runnable",
-            "run",
-            &[],
-            &mut results,
-        )
+    let results = rt.call(instance_id, "test:demo/runnable", "run", &[])
         .await
         .expect("Failed to execute run()");
 
@@ -168,32 +165,22 @@ async fn test_app_to_app_local() {
         .add_component_bytes(&wasm("app_consumer"))
         .expect("Failed to register consumer");
 
-    let provider_inst = InstanceBuilder::new(Arc::clone(&rt), provider_id)
+    let provider_inst_id = InstanceBuilder::new(Arc::clone(&rt), provider_id)
         .link_system("wasi", HostInstance::Wasi(Wasi::new()))
         .instantiate()
         .await
         .expect("Failed to instantiate provider");
 
-    let consumer_inst = InstanceBuilder::new(Arc::clone(&rt), consumer_id)
+    let consumer_inst_id = InstanceBuilder::new(Arc::clone(&rt), consumer_id)
         .link_system("wasi", HostInstance::Wasi(Wasi::new()))
-        .link_local("test:demo/math", provider_inst)
+        .link_local("test:demo/math", provider_inst_id)
         .instantiate()
         .await
         .expect("Failed to instantiate consumer");
 
     // Execute the consumer's run() function, which should internally call
     // the provider's add() function through the local binding
-    let consumer_component = rt.get_component(consumer_id).expect("Failed to get consumer component");
-
-    let mut results = vec![Val::String(String::new())];
-    consumer_inst
-        .call_interface_func(
-            &consumer_component,
-            "test:demo/runnable",
-            "run",
-            &[],
-            &mut results,
-        )
+    let results = rt.call(consumer_inst_id, "test:demo/runnable", "run", &[])
         .await
         .expect("Failed to execute consumer run()");
 
@@ -285,18 +272,16 @@ async fn test_stateful_system() {
         .await
         .expect("Failed to instantiate");
 
-    let instance = exorun::local::LocalInstance::new(store, wasmtime_instance, component.clone());
+    // Add instance to runtime
+    let instance_id = rt.add_instance(exorun::runtime::InstanceState {
+        component_id: app_id,
+        store,
+        instance: wasmtime_instance,
+        component: component.clone(),
+    });
 
     // Execute the run() function which should set/get values in KV
-    let mut results = vec![Val::String(String::new())];
-    instance
-        .call_interface_func(
-            &component,
-            "test:demo/runnable",
-            "run",
-            &[],
-            &mut results,
-        )
+    let results = rt.call(instance_id, "test:demo/runnable", "run", &[])
         .await
         .expect("Failed to execute run()");
 
@@ -394,9 +379,7 @@ async fn test_remote_peer_mock() {
         .add_component_bytes(&wasm("app_consumer"))
         .expect("Failed to register app");
 
-    let consumer_component = rt.get_component(app_id).expect("Failed to get component");
-
-    let instance = InstanceBuilder::new(Arc::clone(&rt), app_id)
+    let instance_id = InstanceBuilder::new(Arc::clone(&rt), app_id)
         .link_system("wasi", HostInstance::Wasi(Wasi::new()))
         .link_remote(
             "test:demo/math",
@@ -407,16 +390,7 @@ async fn test_remote_peer_mock() {
         .expect("Failed to instantiate");
 
     // Execute run() which should make a remote call to the math service
-    use wasmtime::component::Val;
-    let mut results = vec![Val::String(String::new())];
-    instance
-        .call_interface_func(
-            &consumer_component,
-            "test:demo/runnable",
-            "run",
-            &[],
-            &mut results,
-        )
+    let results = rt.call(instance_id, "test:demo/runnable", "run", &[])
         .await
         .expect("Failed to execute run()");
 
@@ -459,7 +433,12 @@ async fn test_diamond_dependency() {
         .await
         .expect("Failed to instantiate instance A");
 
-    let inst_a = exorun::local::LocalInstance::new(store_a, wasmtime_instance_a, component.clone());
+    let inst_a_id = rt.add_instance(exorun::runtime::InstanceState {
+        component_id: app_id,
+        store: store_a,
+        instance: wasmtime_instance_a,
+        component: component.clone(),
+    });
 
     // Create instance B with same shared KV
     let mut linker_b = Linker::new(rt.engine());
@@ -476,19 +455,15 @@ async fn test_diamond_dependency() {
         .await
         .expect("Failed to instantiate instance B");
 
-    let inst_b = exorun::local::LocalInstance::new(store_b, wasmtime_instance_b, component.clone());
+    let inst_b_id = rt.add_instance(exorun::runtime::InstanceState {
+        component_id: app_id,
+        store: store_b,
+        instance: wasmtime_instance_b,
+        component: component.clone(),
+    });
 
     // Execute instance A - it should write to the shared KV
-    use wasmtime::component::Val;
-    let mut results_a = vec![Val::String(String::new())];
-    inst_a
-        .call_interface_func(
-            &component,
-            "test:demo/runnable",
-            "run",
-            &[],
-            &mut results_a,
-        )
+    let results_a = rt.call(inst_a_id, "test:demo/runnable", "run", &[])
         .await
         .expect("Failed to execute instance A run()");
 
@@ -498,15 +473,7 @@ async fn test_diamond_dependency() {
     };
 
     // Execute instance B - it should also write to the shared KV
-    let mut results_b = vec![Val::String(String::new())];
-    inst_b
-        .call_interface_func(
-            &component,
-            "test:demo/runnable",
-            "run",
-            &[],
-            &mut results_b,
-        )
+    let results_b = rt.call(inst_b_id, "test:demo/runnable", "run", &[])
         .await
         .expect("Failed to execute instance B run()");
 

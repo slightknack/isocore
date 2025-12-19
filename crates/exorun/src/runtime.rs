@@ -13,12 +13,16 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use dashmap::DashMap;
+use tokio::sync::Mutex;
 use wasmtime::Engine;
+use wasmtime::Store;
 use wasmtime::component::Component;
+use wasmtime::component::Instance;
+use wasmtime::component::Val;
 
 use crate::peer::Peer;
-use crate::local::LocalInstance;
 use crate::peer::PeerInstance;
+use crate::context::ExorunCtx;
 
 /// Strong type for application identifiers.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
@@ -86,6 +90,15 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Internal state for a running instance.
+/// The Store is !Send, so we wrap it in Arc<Mutex> for async access.
+pub struct InstanceState {
+    pub component_id: ComponentId,
+    pub store: Store<ExorunCtx>,
+    pub instance: Instance,
+    pub component: Component,
+}
+
 /// The central runtime for managing Wasm components and their instances.
 ///
 /// Provides concurrent registration and lookup for:
@@ -96,7 +109,7 @@ pub struct Runtime {
     pub(crate) engine: Engine,
     pub(crate) peers: DashMap<PeerId, Arc<Peer>>,
     pub(crate) components: DashMap<ComponentId, Component>,
-    pub(crate) instances: DashMap<InstanceId, LocalInstance>,
+    pub(crate) instances: DashMap<InstanceId, Arc<Mutex<InstanceState>>>,
     next_peer_id: AtomicU64,
     next_component_id: AtomicU64,
     next_instance_id: AtomicU64,
@@ -165,19 +178,61 @@ impl Runtime {
             .ok_or(Error::AppNotFound(id))
     }
 
-    /// Registers an instance handle and returns its unique ID.
-    pub(crate) fn add_instance(&self, handle: LocalInstance) -> InstanceId {
+    /// Registers an instance and returns its unique ID.
+    pub fn add_instance(&self, state: InstanceState) -> InstanceId {
         let id = InstanceId(self.next_instance_id.fetch_add(1, Ordering::Relaxed));
-        self.instances.insert(id, handle);
+        self.instances.insert(id, Arc::new(Mutex::new(state)));
         id
     }
 
-    /// Retrieves an instance handle by ID.
-    pub fn get_instance(&self, id: InstanceId) -> Result<LocalInstance> {
-        self.instances
-            .get(&id)
-            .map(|entry| entry.value().clone())
-            .ok_or(Error::InstanceNotFound(id))
+
+
+    /// Calls an exported function on an instance.
+    pub async fn call(
+        &self,
+        instance_id: InstanceId,
+        interface: &str,
+        function: &str,
+        args: &[Val],
+    ) -> Result<Vec<Val>> {
+        let state_arc = self.instances
+            .get(&instance_id)
+            .map(|entry| Arc::clone(entry.value()))
+            .ok_or(Error::InstanceNotFound(instance_id))?;
+
+        let mut state = state_arc.lock().await;
+        let InstanceState { component, instance, store, .. } = &mut *state;
+
+        // Get export indices
+        let inst_idx = component
+            .get_export_index(None, interface)
+            .ok_or_else(|| Error::Component(
+                wasmtime::Error::msg(format!("Interface '{}' not found", interface))
+            ))?;
+
+        let func_idx = component
+            .get_export_index(Some(&inst_idx), function)
+            .ok_or_else(|| Error::Component(
+                wasmtime::Error::msg(format!("Function '{}' not found in interface '{}'", function, interface))
+            ))?;
+
+        // Get function from instance
+        let func = instance
+            .get_func(&mut *store, &func_idx)
+            .ok_or_else(|| Error::Component(
+                wasmtime::Error::msg("Failed to get function".to_string())
+            ))?;
+
+        // Determine result count from function type
+        let func_ty = func.ty(&mut *store);
+        let result_count = func_ty.results().len();
+        let mut results = vec![Val::Bool(false); result_count];
+
+        func.call_async(&mut *store, args, &mut results)
+            .await
+            .map_err(Error::Component)?;
+
+        Ok(results)
     }
 
     /// Registers a peer with the runtime and returns its unique ID.

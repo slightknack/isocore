@@ -6,6 +6,8 @@
 //! generates Wasmtime-compatible async host closures,
 //! and wires them into the `Linker`.
 
+use std::sync::Arc;
+
 use wasmtime::component::Linker;
 use wasmtime::component::LinkerInstance;
 use wasmtime::component::Type;
@@ -13,10 +15,9 @@ use wasmtime::component::Val;
 use neorpc::CallEncoder;
 
 use crate::context::ExorunCtx;
-use crate::local::LocalInstance;
-use crate::local::State;
 use crate::ledger::Ledger;
 use crate::runtime::PeerId;
+use crate::runtime::InstanceId;
 use crate::peer::PeerInstance;
 
 #[derive(Debug)]
@@ -147,7 +148,7 @@ impl Binder {
         linker: &mut Linker<ExorunCtx>,
         ledger: &Ledger,
         interface_name: &str,
-        target: LocalInstance,
+        target_id: InstanceId,
     ) -> Result<()> {
         let schema = ledger.interfaces.get(interface_name)
             .ok_or_else(|| Error::InterfaceNotFound(interface_name.to_string()))?;
@@ -155,27 +156,12 @@ impl Binder {
         let mut linker_instance = linker.instance(interface_name)
             .map_err(Error::Linker)?;
 
-        // Precompute interface export index
-        let inst_idx = target.component
-            .get_export_index(None, interface_name)
-            .ok_or_else(|| Error::InterfaceExportNotFound {
-                interface: interface_name.to_string(),
-            })?;
-
         for (method_name, signature) in schema.funcs.iter() {
-            // Precompute function export index
-            let func_idx = target.component
-                .get_export_index(Some(&inst_idx), method_name)
-                .ok_or_else(|| Error::FunctionExportNotFound {
-                    interface: interface_name.to_string(),
-                    function: method_name.to_string(),
-                })?;
-
             Binder::local_method(
                 &mut linker_instance,
                 method_name,
-                target.clone(),
-                func_idx,
+                interface_name,
+                target_id,
                 signature.results.len(),
             )?;
         }
@@ -187,26 +173,26 @@ impl Binder {
     fn local_method(
         linker_instance: &mut LinkerInstance<ExorunCtx>,
         method_name: &str,
-        target: LocalInstance,
-        func_idx: wasmtime::component::ComponentExportIndex,
-        result_count: usize,
+        interface_name: &str,
+        target_id: InstanceId,
+        _result_count: usize,
     ) -> Result<()> {
-        linker_instance.func_new_async(method_name, move |_store, _func_ty, args, results| {
-            let target = target.clone();
-            let func_idx = func_idx.clone();
+        let interface_name = interface_name.to_string();
+        let method_name_str = method_name.to_string();
+        
+        linker_instance.func_new_async(method_name, move |store, _func_ty, args, results| {
+            let interface_name = interface_name.clone();
+            let method_name = method_name_str.clone();
             let args_vec: Vec<Val> = args.to_vec();
 
             Box::new(async move {
-                let mut guard = target.inner.lock().await;
-                let State { store, instance } = &mut *guard;
+                // Get runtime from store context
+                let runtime = Arc::clone(&store.data().runtime);
 
-                let func = instance
-                    .get_func(&mut *store, &func_idx)
-                    .ok_or_else(|| wasmtime::Error::msg("Failed to get function from instance"))?;
-
-                let mut call_results = vec![Val::Bool(false); result_count];
-                func.call_async(&mut *store, &args_vec, &mut call_results)
-                    .await?;
+                // Call through runtime
+                let call_results = runtime.call(target_id, &interface_name, &method_name, &args_vec)
+                    .await
+                    .map_err(|e| wasmtime::Error::msg(e.to_string()))?;
 
                 if call_results.len() != results.len() {
                     return Err(wasmtime::Error::msg(format!(

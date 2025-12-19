@@ -12,9 +12,10 @@ use crate::bind::Binder;
 use crate::context::ContextBuilder;
 use crate::runtime;
 use crate::runtime::ComponentId;
+use crate::runtime::InstanceId;
+use crate::runtime::InstanceState;
 use crate::runtime::Runtime;
 use crate::peer::PeerInstance;
-use crate::local::LocalInstance;
 use crate::host::HostInstance;
 use crate::host;
 
@@ -64,7 +65,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Linking strategy for an interface.
 pub enum Link {
     System { interface: String, instance: HostInstance  },
-    Local  { interface: String, instance: LocalInstance },
+    Local  { interface: String, instance: InstanceId },
     Remote { interface: String, instance: PeerInstance  },
 }
 
@@ -94,7 +95,7 @@ impl InstanceBuilder {
         self
     }
 
-    pub fn link_local(mut self, interface: impl Into<String>, target: LocalInstance) -> Self {
+    pub fn link_local(mut self, interface: impl Into<String>, target: InstanceId) -> Self {
         self.links.push(Link::Local {
             interface: interface.into(),
             instance: target,
@@ -116,7 +117,7 @@ impl InstanceBuilder {
     //     self
     // }
 
-    pub async fn instantiate(mut self) -> Result<LocalInstance> {
+    pub async fn instantiate(mut self) -> Result<InstanceId> {
         let component = self.runtime.get_component(self.component_id)?;
         let ledger = crate::ledger::Ledger::from_component(&component)
             .map_err(|e| Error::Linker(wasmtime::Error::msg(e.to_string())))?;
@@ -130,7 +131,7 @@ impl InstanceBuilder {
                     target.link(&mut linker, &mut self.context_builder)?;
                 }
                 Link::Local { interface, instance: target } => {
-                    Binder::local_interface(&mut linker, &ledger, &interface, target.clone())?;
+                    Binder::local_interface(&mut linker, &ledger, &interface, target)?;
                 }
                 Link::Remote { interface, instance: target } => {
                     Binder::peer_interface(&mut linker, &ledger, &interface, target)?;
@@ -146,6 +147,14 @@ impl InstanceBuilder {
             .await
             .map_err(Error::Instantiate)?;
 
-        Ok(LocalInstance::new(store, instance, component))
+        let state = InstanceState {
+            component_id: self.component_id,
+            store,
+            instance,
+            component,
+        };
+
+        let instance_id = self.runtime.add_instance(state);
+        Ok(instance_id)
     }
 }
