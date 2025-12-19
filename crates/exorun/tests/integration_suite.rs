@@ -288,7 +288,6 @@ async fn test_stateful_system() {
     let instance = exorun::local::LocalInstance::new(store, wasmtime_instance, component.clone());
 
     // Execute the run() function which should set/get values in KV
-    use wasmtime::component::Val;
     let mut results = vec![Val::String(String::new())];
     instance
         .call_interface_func(
@@ -309,7 +308,7 @@ async fn test_stateful_system() {
 
     // Verify the KV operations worked
     assert!(!result.is_empty(), "KV app should return a non-empty result");
-    
+
     // Verify the KV store has data
     let kv_store = kv_sys.store.lock().unwrap();
     assert!(!kv_store.is_empty(), "KV store should contain data after execution");
@@ -317,17 +316,85 @@ async fn test_stateful_system() {
 
 // --- Test 7: Remote Peer (Mock Transport) ---
 
+struct MathServiceTransport {
+    response_tx: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+    response_rx: tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>>,
+}
+
+impl MathServiceTransport {
+    fn new() -> Self {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        Self {
+            response_tx: tx,
+            response_rx: tokio::sync::Mutex::new(rx),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Transport for MathServiceTransport {
+    async fn send(&self, payload: &[u8]) -> Result<(), exorun::transport::Error> {
+        use neopack::{Decoder, Encoder};
+        use neorpc::{RpcFrame, ReplyOkEncoder, encode_vals_to_bytes};
+        use wasmtime::component::Val;
+        
+        let mut dec = Decoder::new(payload);
+        let frame = RpcFrame::decode(&mut dec).map_err(|e| exorun::transport::Error::Io(e.to_string()))?;
+
+        match frame {
+            RpcFrame::Call(mut c) => {
+                eprintln!("Mock transport received call: seq={}, target={}, method={}", c.seq, c.target, c.method);
+                // Decode the call arguments (two u32 values from a list)
+                let mut list_iter = c.args.list().map_err(|e| exorun::transport::Error::Io(e.to_string()))?;
+                let a = list_iter.next()
+                    .ok_or_else(|| exorun::transport::Error::Io("Missing arg a".to_string()))?
+                    .u32().map_err(|e| exorun::transport::Error::Io(e.to_string()))?;
+                let b = list_iter.next()
+                    .ok_or_else(|| exorun::transport::Error::Io("Missing arg b".to_string()))?
+                    .u32().map_err(|e| exorun::transport::Error::Io(e.to_string()))?;
+                eprintln!("Mock transport decoded args: a={}, b={}", a, b);
+                
+                // Calculate result: add(a, b) = a + b
+                let result = a + b;
+                
+                // Encode the result using encode_vals_to_bytes
+                let result_bytes = encode_vals_to_bytes(&[Val::U32(result)])
+                    .map_err(|e| exorun::transport::Error::Io(e.to_string()))?;
+                
+                // Create reply
+                let mut enc = Encoder::new();
+                ReplyOkEncoder::new(c.seq, &result_bytes).encode(&mut enc).map_err(|e| exorun::transport::Error::Io(e.to_string()))?;
+                let response = enc.into_bytes().map_err(|e| exorun::transport::Error::Io(e.to_string()))?;
+                
+                eprintln!("Mock transport sending response: seq={}, result={}, bytes={:?}", c.seq, result, response);
+                self.response_tx.send(response).map_err(|_| exorun::transport::Error::ConnectionLost("Channel closed".into()))?;
+            }
+            _ => return Err(exorun::transport::Error::Io("Expected Call frame".to_string())),
+        };
+
+        Ok(())
+    }
+
+    async fn recv(&self) -> Result<Option<Vec<u8>>, exorun::transport::Error> {
+        let msg = self.response_rx.lock().await.recv().await;
+        eprintln!("Mock transport recv: {:?}", msg.as_ref().map(|m| m.len()));
+        Ok(msg)
+    }
+}
+
 #[tokio::test]
 async fn test_remote_peer_mock() {
     let rt = Arc::new(Runtime::new().expect("Failed to create runtime"));
 
-    let transport = Box::new(MockTransport);
+    let transport = Box::new(MathServiceTransport::new());
     let peer = Arc::new(Peer::new("math-service", transport));
     let peer_id = rt.add_peer(peer);
 
     let app_id = rt
         .add_component_bytes(&wasm("app_consumer"))
         .expect("Failed to register app");
+
+    let consumer_component = rt.get_component(app_id).expect("Failed to get component");
 
     let instance = InstanceBuilder::new(Arc::clone(&rt), app_id)
         .link_system("wasi", HostInstance::Wasi(Wasi::new()))
@@ -339,15 +406,29 @@ async fn test_remote_peer_mock() {
         .await
         .expect("Failed to instantiate");
 
-    // TODO: Execute remote call once fixtures are updated
-    // For now, we've verified that:
-    // 1. Instance can be created with remote binding
-    // 2. MockTransport is properly linked
-    // 3. Remote target configuration is correct
+    // Execute run() which should make a remote call to the math service
+    use wasmtime::component::Val;
+    let mut results = vec![Val::String(String::new())];
+    instance
+        .call_interface_func(
+            &consumer_component,
+            "test:demo/runnable",
+            "run",
+            &[],
+            &mut results,
+        )
+        .await
+        .expect("Failed to execute run()");
 
-    // Future work: Execute run() which should attempt remote call
-    // With MockTransport returning None, it should fail with connection error
-    let _ = instance;
+    // Extract and verify the result
+    let result = match &results[0] {
+        Val::String(s) => s.clone(),
+        _ => panic!("Expected string result from consumer run()"),
+    };
+
+    // The consumer should have successfully called the remote math service
+    assert!(!result.is_empty(), "Consumer should return a non-empty result");
+    assert_eq!(result, "10 + 5 = 15", "Consumer should return the math result from remote peer");
 }
 
 // --- Test 8: Diamond Dependency (Shared System) ---
@@ -397,17 +478,53 @@ async fn test_diamond_dependency() {
 
     let inst_b = exorun::local::LocalInstance::new(store_b, wasmtime_instance_b, component.clone());
 
-    // TODO: Execute both instances and verify shared state once fixtures are updated
-    // For now, we've verified that:
-    // 1. Multiple instances can be created from the same app
-    // 2. Both instances can share the same system component (shared_kv)
-    // 3. Diamond dependency pattern is correctly set up
+    // Execute instance A - it should write to the shared KV
+    use wasmtime::component::Val;
+    let mut results_a = vec![Val::String(String::new())];
+    inst_a
+        .call_interface_func(
+            &component,
+            "test:demo/runnable",
+            "run",
+            &[],
+            &mut results_a,
+        )
+        .await
+        .expect("Failed to execute instance A run()");
 
-    // Future work: Execute both instances and verify they share KV state
-    // let result_a = inst_a.exec(|store, inst| { ... }).await;
-    // let result_b = inst_b.exec(|store, inst| { ... }).await;
-    // Verify shared_kv.store contains data from both
-    let _ = inst_a;
-    let _ = inst_b;
-    let _store_data = shared_kv.store.lock().unwrap();
+    let result_a = match &results_a[0] {
+        Val::String(s) => s.clone(),
+        _ => panic!("Expected string result from instance A run()"),
+    };
+
+    // Execute instance B - it should also write to the shared KV
+    let mut results_b = vec![Val::String(String::new())];
+    inst_b
+        .call_interface_func(
+            &component,
+            "test:demo/runnable",
+            "run",
+            &[],
+            &mut results_b,
+        )
+        .await
+        .expect("Failed to execute instance B run()");
+
+    let result_b = match &results_b[0] {
+        Val::String(s) => s.clone(),
+        _ => panic!("Expected string result from instance B run()"),
+    };
+
+    // Verify both instances executed successfully
+    assert!(!result_a.is_empty(), "Instance A should return a non-empty result");
+    assert!(!result_b.is_empty(), "Instance B should return a non-empty result");
+
+    // Verify the shared KV store contains data from both instances
+    let kv_store = shared_kv.store.lock().unwrap();
+    assert!(!kv_store.is_empty(), "Shared KV store should contain data from both instances");
+    
+    // The diamond dependency test verifies:
+    // 1. Multiple instances can be created from the same component
+    // 2. Both instances share the same system component (shared_kv)
+    // 3. Both instances can execute and interact with the shared state
 }
