@@ -62,7 +62,7 @@ impl Binder {
         interface_name: &str,
         target: PeerInstance,
     ) -> Result<()> {
-        let schema = ledger.interfaces.get(interface_name)
+        let schema = ledger.imports.get(interface_name)
             .ok_or_else(|| Error::InterfaceNotFound(interface_name.to_string()))?;
 
         let mut linker_instance = linker.instance(interface_name)
@@ -150,7 +150,7 @@ impl Binder {
         interface_name: &str,
         target_id: InstanceId,
     ) -> Result<()> {
-        let schema = ledger.interfaces.get(interface_name)
+        let schema = ledger.imports.get(interface_name)
             .ok_or_else(|| Error::InterfaceNotFound(interface_name.to_string()))?;
 
         let mut linker_instance = linker.instance(interface_name)

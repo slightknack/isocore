@@ -2,9 +2,11 @@
 //!
 //! Provides a fluent API for composing an instance with various linking strategies.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use wasmtime::component::Linker;
+use wasmtime::component::ComponentExportIndex;
 use wasmtime::Store;
 
 use crate::bind;
@@ -122,23 +124,27 @@ impl InstanceBuilder {
 
     pub async fn build(mut self) -> Result<InstanceId> {
         let component = self.runtime.get_component(self.component_id)?;
-        let ledger = ledger::Ledger::from_component(&component)?;
+        let my_ledger = self.runtime.get_ledger(self.component_id)?;
 
         let mut linker = Linker::new(self.runtime.engine());
 
-        // Process links (consuming them to transfer ownership)
-        for link in self.links {
+        // Process links with bidirectional validation
+        for link in &self.links {
             match link {
                 Link::System { interface, instance: host_instance } => {
                     // Validate that the host instance can provide this interface
-                    host_instance.validate_interface(&interface)?;
+                    host_instance.validate_interface(interface)?;
                     host_instance.link(&mut linker, &mut self.context_builder)?;
                 }
-                Link::Local { interface, instance: target } => {
-                    Binder::local_interface(&mut linker, &ledger, &interface, target)?;
+                Link::Local { interface, instance: target_id } => {
+                    // Bidirectional validation: check target exports match my imports
+                    self.validate_local_link(interface, *target_id)?;
+                    Binder::local_interface(&mut linker, &my_ledger, interface, *target_id)?;
                 }
                 Link::Remote { interface, instance: target } => {
-                    Binder::peer_interface(&mut linker, &ledger, &interface, target)?;
+                    // For remote links, we can only validate our import side
+                    // (we don't have the remote component's ledger)
+                    Binder::peer_interface(&mut linker, &my_ledger, interface, target.clone())?;
                 }
             }
         }
@@ -151,14 +157,91 @@ impl InstanceBuilder {
             .await
             .map_err(Error::Instantiate)?;
 
+        // Pre-compute export indices for fast runtime.call()
+        let export_indices = build_export_indices(&component, &my_ledger.exports)?;
+
         let state = InstanceState {
             component_id: self.component_id,
             store,
             instance,
             component,
+            export_indices,
         };
 
         let instance_id = self.runtime.add_instance(state);
         Ok(instance_id)
     }
+
+    /// Validates that a local link is compatible: my import matches target's export.
+    fn validate_local_link(&self, interface: &str, target_id: InstanceId) -> Result<()> {
+        let my_ledger = self.runtime.get_ledger(self.component_id)?;
+        
+        // Get my import schema
+        let my_import = my_ledger.imports.get(interface)
+            .ok_or_else(|| ledger::Error::InvalidParameter {
+                import_name: interface.to_string(),
+                details: "interface not found in component imports".to_string(),
+            })?;
+        
+        // Get target's component ID and ledger
+        let target_state = self.runtime.instances
+            .get(&target_id)
+            .ok_or(runtime::Error::InstanceNotFound(target_id))?;
+        
+        let target_component_id = target_state.value().try_lock()
+            .map_err(|_| runtime::Error::InstanceNotFound(target_id))?
+            .component_id;
+        
+        let target_ledger = self.runtime.get_ledger(target_component_id)?;
+        
+        // Get target's export schema
+        let target_export = target_ledger.exports.get(interface)
+            .ok_or_else(|| ledger::Error::InvalidParameter {
+                import_name: interface.to_string(),
+                details: format!("target instance {} does not export interface '{}'", target_id, interface),
+            })?;
+        
+        // Validate compatibility
+        ledger::validate_compatibility(interface, my_import, target_export)?;
+        
+        Ok(())
+    }
+}
+
+/// Builds a two-level map of export indices for all exported functions.
+///
+/// Uses BTreeMap for O(log n) lookup without string allocation on the hot path.
+fn build_export_indices(
+    component: &wasmtime::component::Component,
+    exports: &std::collections::HashMap<String, ledger::InterfaceSchema>,
+) -> Result<BTreeMap<String, BTreeMap<String, ComponentExportIndex>>> {
+    
+    let mut indices = BTreeMap::new();
+    
+    for (interface_name, interface_schema) in exports {
+        // Get the interface export index
+        let inst_idx = component
+            .get_export_index(None, interface_name)
+            .ok_or_else(|| ledger::Error::InvalidResult {
+                import_name: interface_name.clone(),
+                details: "interface not found in component exports".to_string(),
+            })?;
+        
+        let mut func_indices = BTreeMap::new();
+        for func_name in interface_schema.funcs.keys() {
+            // Get the function export index within the interface
+            let func_idx = component
+                .get_export_index(Some(&inst_idx), func_name)
+                .ok_or_else(|| ledger::Error::InvalidResult {
+                    import_name: format!("{}#{}", interface_name, func_name),
+                    details: "function not found in interface exports".to_string(),
+                })?;
+            
+            func_indices.insert(func_name.clone(), func_idx);
+        }
+        
+        indices.insert(interface_name.clone(), func_indices);
+    }
+    
+    Ok(indices)
 }

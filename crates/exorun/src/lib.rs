@@ -45,5 +45,11 @@ pub mod runtime;
 pub mod host;
 pub mod transport;
 
+// Re-export commonly used types
+pub use runtime::Runtime;
+pub use runtime::ComponentId;
+pub use runtime::InstanceId;
+pub use runtime::PeerId;
+
 #[cfg(test)]
 mod tests;

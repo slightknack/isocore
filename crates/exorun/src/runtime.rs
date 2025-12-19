@@ -8,6 +8,7 @@
 //! Uses DashMap for concurrent access without global locking, enabling high-throughput
 //! scenarios where multiple tasks register apps or spawn instances simultaneously.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
@@ -17,6 +18,7 @@ use tokio::sync::Mutex;
 use wasmtime::Engine;
 use wasmtime::Store;
 use wasmtime::component::Component;
+use wasmtime::component::ComponentExportIndex;
 use wasmtime::component::Instance;
 use wasmtime::component::Val;
 
@@ -24,6 +26,7 @@ use crate::local::InstanceBuilder;
 use crate::peer::Peer;
 use crate::peer::PeerInstance;
 use crate::context::ExorunCtx;
+use crate::ledger;
 
 /// Strong type for component identifiers.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
@@ -81,6 +84,7 @@ pub enum Error {
     FunctionLookupFailed,
     Engine(wasmtime::Error),
     Component(wasmtime::Error),
+    Ledger(ledger::Error),
 }
 
 impl std::fmt::Display for Error {
@@ -94,7 +98,14 @@ impl std::fmt::Display for Error {
             Self::FunctionLookupFailed => write!(f, "failed to get function from instance"),
             Self::Engine(e) => write!(f, "engine error: {}", e),
             Self::Component(e) => write!(f, "component error: {}", e),
+            Self::Ledger(e) => write!(f, "ledger error: {}", e),
         }
+    }
+}
+
+impl From<ledger::Error> for Error {
+    fn from(e: ledger::Error) -> Self {
+        Self::Ledger(e)
     }
 }
 
@@ -112,18 +123,21 @@ pub struct InstanceState {
     pub store: Store<ExorunCtx>,
     pub instance: Instance,
     pub component: Component,
+    pub export_indices: BTreeMap<String, BTreeMap<String, ComponentExportIndex>>,
 }
 
 /// The central runtime for managing Wasm components and their instances.
 ///
 /// Provides concurrent registration and lookup for:
 /// - Components: Compiled Wasm components ready for instantiation
+/// - Ledgers: Type schemas for each component (shared across instances)
 /// - Peers: Remote connections identified by logical PeerId
 /// - Instances: Running component instances
 pub struct Runtime {
     pub(crate) engine: Engine,
     pub(crate) peers: DashMap<PeerId, Arc<Peer>>,
     pub(crate) components: DashMap<ComponentId, Component>,
+    pub(crate) ledgers: DashMap<ComponentId, ledger::Ledger>,
     pub(crate) instances: DashMap<InstanceId, Arc<Mutex<InstanceState>>>,
     next_peer_id: AtomicU64,
     next_component_id: AtomicU64,
@@ -142,6 +156,7 @@ impl Runtime {
         Ok(Arc::new(Self {
             engine,
             components: DashMap::new(),
+            ledgers: DashMap::new(),
             peers: DashMap::new(),
             instances: DashMap::new(),
             next_component_id: AtomicU64::new(1),
@@ -155,6 +170,7 @@ impl Runtime {
         Arc::new(Self {
             engine,
             components: DashMap::new(),
+            ledgers: DashMap::new(),
             peers: DashMap::new(),
             instances: DashMap::new(),
             next_component_id: AtomicU64::new(1),
@@ -171,23 +187,34 @@ impl Runtime {
     /// Registers a compiled component and returns its unique ID.
     ///
     /// The component bytes are compiled if not already a Component.
+    /// Also creates and stores a ledger for the component.
     pub fn add_component_bytes(&self, bytes: &[u8]) -> Result<ComponentId> {
         let component = Component::new(&self.engine, bytes).map_err(Error::Component)?;
-        let id = ComponentId(self.next_component_id.fetch_add(1, Ordering::Relaxed));
-        self.components.insert(id, component);
-        Ok(id)
+        self.add_component(component)
     }
 
     /// Registers a pre-compiled component and returns its unique ID.
-    pub fn add_component(&self, component: Component) -> ComponentId {
+    ///
+    /// Creates and stores a ledger for the component, capturing both imports and exports.
+    pub fn add_component(&self, component: Component) -> Result<ComponentId> {
+        let ledger = ledger::Ledger::from_component(&component)?;
         let id = ComponentId(self.next_component_id.fetch_add(1, Ordering::Relaxed));
         self.components.insert(id, component);
-        id
+        self.ledgers.insert(id, ledger);
+        Ok(id)
     }
 
     /// Retrieves a component by ID.
     pub fn get_component(&self, id: ComponentId) -> Result<Component> {
         self.components
+            .get(&id)
+            .map(|entry| entry.value().clone())
+            .ok_or(Error::ComponentNotFound(id))
+    }
+
+    /// Retrieves a ledger by component ID.
+    pub fn get_ledger(&self, id: ComponentId) -> Result<ledger::Ledger> {
+        self.ledgers
             .get(&id)
             .map(|entry| entry.value().clone())
             .ok_or(Error::ComponentNotFound(id))
@@ -210,6 +237,9 @@ impl Runtime {
     }
 
     /// Calls an exported function on an instance.
+    ///
+    /// Uses pre-computed export indices for O(1) lookup instead of
+    /// traversing component metadata on every call.
     pub async fn call(
         &self,
         instance_id: InstanceId,
@@ -223,25 +253,25 @@ impl Runtime {
             .ok_or(Error::InstanceNotFound(instance_id))?;
 
         let mut state = state_arc.lock().await;
-        let InstanceState { component, instance, store, .. } = &mut *state;
+        let InstanceState { instance, store, export_indices, .. } = &mut *state;
 
-        // Get export indices
-        let inst_idx = component
-            .get_export_index(None, interface)
+        // Two-level lookup - no string allocations
+        let interface_map = export_indices
+            .get(interface)
             .ok_or_else(|| Error::InterfaceNotFound {
-                interface: interface.to_string()
+                interface: interface.to_string(),
             })?;
-
-        let func_idx = component
-            .get_export_index(Some(&inst_idx), function)
+        
+        let func_idx = interface_map
+            .get(function)
             .ok_or_else(|| Error::FunctionNotFound {
                 interface: interface.to_string(),
-                function: function.to_string()
+                function: function.to_string(),
             })?;
 
         // Get function from instance
         let func = instance
-            .get_func(&mut *store, &func_idx)
+            .get_func(&mut *store, func_idx)
             .ok_or(Error::FunctionLookupFailed)?;
 
         // Determine result count from function type

@@ -84,6 +84,7 @@ struct PendingResponse {
 /// A handle to the resources needed to bind a remote target.
 /// Uses a logical PeerId that will be resolved to a Peer at call time
 /// via the Runtime in ExorunCtx.
+#[derive(Clone)]
 pub struct PeerInstance {
     pub peer_id: PeerId,
     pub target_id: String,

@@ -50,25 +50,40 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-// TODO: we want to validate bidirectionally,
-//       so it might be worthwhile to list all exports too
-/// A registry of all imported interfaces and functions for a component.
+/// A registry of all imported and exported interfaces for a component.
+///
+/// This enables bidirectional validation: we can check that when linking,
+/// the importer's requirements match the exporter's capabilities.
 #[derive(Clone, Debug)]
 pub struct Ledger {
-    pub interfaces: HashMap<String, InterfaceSchema>,
+    pub imports: HashMap<String, InterfaceSchema>,
+    pub exports: HashMap<String, InterfaceSchema>,
 }
 
 impl Ledger {
-    /// Introspects a Component to build a Ledger of its imports.
+    /// Introspects a Component to build a Ledger of its imports and exports.
     ///
     /// Only includes interfaces that are wire-safe (no resources, futures, or streams).
     /// Interfaces that aren't wire-safe are silently skipped, as they may be host
     /// components or local-only interfaces.
     pub fn from_component(component: &Component) -> Result<Self> {
         let engine = component.engine();
+        let comp_ty = component.component_type();
+
+        let imports = Self::extract_interfaces(engine, comp_ty.imports(engine))?;
+        let exports = Self::extract_interfaces(engine, comp_ty.exports(engine))?;
+
+        Ok(Self { imports, exports })
+    }
+
+    /// Extracts wire-safe interfaces from an iterator of component items.
+    fn extract_interfaces<'a>(
+        engine: &wasmtime::Engine,
+        items: impl Iterator<Item = (&'a str, ComponentItem)>,
+    ) -> Result<HashMap<String, InterfaceSchema>> {
         let mut interfaces = HashMap::new();
 
-        for (name, item) in component.component_type().imports(engine) {
+        for (name, item) in items {
             let ComponentItem::ComponentInstance(inst_ty) = item else { continue };
 
             // Try to extract the interface schema - skip if it's not wire-safe
@@ -81,13 +96,63 @@ impl Ledger {
             interfaces.insert(name.to_string(), interface);
         }
 
-        Ok(Self { interfaces })
+        Ok(interfaces)
     }
 
-    /// Looks up the signature for an interface method.
+    /// Looks up the signature for an interface method in imports.
     pub fn get_interface_func(&self, interface: &str, method: &str) -> Option<&FuncSignature> {
-        self.interfaces.get(interface).and_then(|i| i.funcs.get(method))
+        self.imports.get(interface).and_then(|i| i.funcs.get(method))
     }
+}
+
+/// Validates that an import interface is compatible with an export interface.
+///
+/// Checks that:
+/// - Every function in the import exists in the export
+/// - Parameter counts match
+/// - Result counts match
+///
+/// Note: We don't do deep type checking here because wasmtime will validate
+/// types during instantiation. This validation provides early, clear errors.
+pub fn validate_compatibility(
+    interface_name: &str,
+    import: &InterfaceSchema,
+    export: &InterfaceSchema,
+) -> Result<()> {
+    for (func_name, import_sig) in &import.funcs {
+        let export_sig = export.funcs.get(func_name).ok_or_else(|| {
+            Error::InvalidParameter {
+                import_name: format!("{}#{}", interface_name, func_name),
+                details: format!("function not found in target's exports"),
+            }
+        })?;
+
+        // Validate parameter count
+        if import_sig.params.len() != export_sig.params.len() {
+            return Err(Error::InvalidParameter {
+                import_name: format!("{}#{}", interface_name, func_name),
+                details: format!(
+                    "parameter count mismatch: import expects {}, export provides {}",
+                    import_sig.params.len(),
+                    export_sig.params.len()
+                ),
+            });
+        }
+
+        // Validate result count
+        if import_sig.results.len() != export_sig.results.len() {
+            return Err(Error::InvalidResult {
+                import_name: format!("{}#{}", interface_name, func_name),
+                details: format!(
+                    "result count mismatch: import expects {}, export provides {}",
+                    import_sig.results.len(),
+                    export_sig.results.len()
+                ),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 /// The schema for a named interface (e.g., "wasi:filesystem/types").
@@ -250,7 +315,7 @@ mod tests {
 
         let ledger = Ledger::from_component(&c).unwrap();
         // Interface with resources should be skipped, not included in the ledger
-        assert!(ledger.interfaces.is_empty());
+        assert!(ledger.imports.is_empty());
         assert!(ledger.get_interface_func("bad", "use-resource").is_none());
     }
 
@@ -271,7 +336,7 @@ mod tests {
 
         let ledger = Ledger::from_component(&c).unwrap();
         // Interface with resources in results should be skipped
-        assert!(ledger.interfaces.is_empty());
+        assert!(ledger.imports.is_empty());
         assert!(ledger.get_interface_func("bad", "get-resource").is_none());
     }
 
@@ -292,7 +357,7 @@ mod tests {
 
         let ledger = Ledger::from_component(&c).unwrap();
         // Interface with nested resources should be skipped
-        assert!(ledger.interfaces.is_empty());
+        assert!(ledger.imports.is_empty());
         assert!(ledger.get_interface_func("bad", "process-list").is_none());
     }
 
