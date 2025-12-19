@@ -117,7 +117,7 @@ impl InstanceBuilder {
     //     self
     // }
 
-    pub async fn instantiate(mut self) -> Result<InstanceId> {
+    pub async fn build(mut self) -> Result<InstanceId> {
         let component = self.runtime.get_component(self.component_id)?;
         let ledger = crate::ledger::Ledger::from_component(&component)
             .map_err(|e| Error::Linker(wasmtime::Error::msg(e.to_string())))?;

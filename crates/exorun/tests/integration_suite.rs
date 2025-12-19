@@ -102,23 +102,22 @@ impl SysLogger {
 
 #[tokio::test]
 async fn test_system_integration() {
-    let rt = Arc::new(Runtime::new().expect("Failed to create runtime"));
+    let rt = Runtime::new().expect("Failed to create runtime");
     let logger_sys = SysLogger::new();
 
     let app_id = rt
         .add_component_bytes(&wasm("app_logger"))
         .expect("Failed to register app");
 
+    // Custom systems need manual linker setup for now
     let component = rt.get_component(app_id).expect("Failed to get component");
-
-    // For custom system components, we need to manually set up the linker
     let mut linker = Linker::new(rt.engine());
     let mut ctx_builder = exorun::context::ContextBuilder::new();
 
     HostInstance::Wasi(Wasi::new()).link(&mut linker, &mut ctx_builder).expect("Failed to link WASI");
     logger_sys.install(&mut linker).expect("Failed to install logger");
 
-    let ctx = ctx_builder.build(Arc::clone(&rt));
+    let ctx = ctx_builder.build(rt.clone());
     let mut store = wasmtime::Store::new(rt.engine(), ctx);
 
     let wasmtime_instance = linker
@@ -126,7 +125,6 @@ async fn test_system_integration() {
         .await
         .expect("Failed to instantiate");
 
-    // Add instance to runtime
     let instance_id = rt.add_instance(exorun::runtime::InstanceState {
         component_id: app_id,
         store,
@@ -156,7 +154,7 @@ async fn test_system_integration() {
 
 #[tokio::test]
 async fn test_app_to_app_local() {
-    let rt = Arc::new(Runtime::new().expect("Failed to create runtime"));
+    let rt = Runtime::new().expect("Failed to create runtime");
 
     let provider_id = rt
         .add_component_bytes(&wasm("app_provider"))
@@ -165,16 +163,16 @@ async fn test_app_to_app_local() {
         .add_component_bytes(&wasm("app_consumer"))
         .expect("Failed to register consumer");
 
-    let provider_inst_id = InstanceBuilder::new(Arc::clone(&rt), provider_id)
+    let provider_inst_id = rt.instantiate(provider_id)
         .link_system("wasi", HostInstance::Wasi(Wasi::new()))
-        .instantiate()
+        .build()
         .await
         .expect("Failed to instantiate provider");
 
-    let consumer_inst_id = InstanceBuilder::new(Arc::clone(&rt), consumer_id)
+    let consumer_inst_id = rt.instantiate(consumer_id)
         .link_system("wasi", HostInstance::Wasi(Wasi::new()))
         .link_local("test:demo/math", provider_inst_id)
-        .instantiate()
+        .build()
         .await
         .expect("Failed to instantiate consumer");
 
@@ -249,14 +247,14 @@ impl InMemoryKv {
 
 #[tokio::test]
 async fn test_stateful_system() {
-    let rt = Arc::new(Runtime::new().expect("Failed to create runtime"));
+    let rt = Runtime::new().expect("Failed to create runtime");
     let kv_sys = InMemoryKv::new();
 
     let app_id = rt
         .add_component_bytes(&wasm("app_kv"))
         .expect("Failed to register app");
 
-    // For custom system components, we need to manually set up the linker
+    // Custom systems need manual linker setup for now
     let component = rt.get_component(app_id).expect("Failed to get component");
     let mut linker = Linker::new(rt.engine());
     let mut ctx_builder = exorun::context::ContextBuilder::new();
@@ -264,7 +262,7 @@ async fn test_stateful_system() {
     HostInstance::Wasi(Wasi::new()).link(&mut linker, &mut ctx_builder).expect("Failed to link WASI");
     kv_sys.install(&mut linker).expect("Failed to install kv");
 
-    let ctx = ctx_builder.build(Arc::clone(&rt));
+    let ctx = ctx_builder.build(rt.clone());
     let mut store = wasmtime::Store::new(rt.engine(), ctx);
 
     let wasmtime_instance = linker
@@ -272,7 +270,6 @@ async fn test_stateful_system() {
         .await
         .expect("Failed to instantiate");
 
-    // Add instance to runtime
     let instance_id = rt.add_instance(exorun::runtime::InstanceState {
         component_id: app_id,
         store,
@@ -369,7 +366,7 @@ impl Transport for MathServiceTransport {
 
 #[tokio::test]
 async fn test_remote_peer_mock() {
-    let rt = Arc::new(Runtime::new().expect("Failed to create runtime"));
+    let rt = Runtime::new().expect("Failed to create runtime");
 
     let transport = Box::new(MathServiceTransport::new());
     let peer = Arc::new(Peer::new("math-service", transport));
@@ -379,13 +376,13 @@ async fn test_remote_peer_mock() {
         .add_component_bytes(&wasm("app_consumer"))
         .expect("Failed to register app");
 
-    let instance_id = InstanceBuilder::new(Arc::clone(&rt), app_id)
+    let instance_id = rt.instantiate(app_id)
         .link_system("wasi", HostInstance::Wasi(Wasi::new()))
         .link_remote(
             "test:demo/math",
             peer_id.get_instance("math-service-on-mars"),
         )
-        .instantiate()
+        .build()
         .await
         .expect("Failed to instantiate");
 
@@ -409,7 +406,7 @@ async fn test_remote_peer_mock() {
 
 #[tokio::test]
 async fn test_diamond_dependency() {
-    let rt = Arc::new(Runtime::new().expect("Failed to create runtime"));
+    let rt = Runtime::new().expect("Failed to create runtime");
     let shared_kv = InMemoryKv::new();
 
     let app_id = rt
@@ -425,7 +422,7 @@ async fn test_diamond_dependency() {
     HostInstance::Wasi(Wasi::new()).link(&mut linker_a, &mut ctx_builder_a).expect("Failed to link WASI");
     shared_kv.install(&mut linker_a).expect("Failed to install kv");
 
-    let ctx_a = ctx_builder_a.build(Arc::clone(&rt));
+    let ctx_a = ctx_builder_a.build(rt.clone());
     let mut store_a = wasmtime::Store::new(rt.engine(), ctx_a);
 
     let wasmtime_instance_a = linker_a
@@ -447,7 +444,7 @@ async fn test_diamond_dependency() {
     HostInstance::Wasi(Wasi::new()).link(&mut linker_b, &mut ctx_builder_b).expect("Failed to link WASI");
     shared_kv.install(&mut linker_b).expect("Failed to install kv");
 
-    let ctx_b = ctx_builder_b.build(Arc::clone(&rt));
+    let ctx_b = ctx_builder_b.build(rt.clone());
     let mut store_b = wasmtime::Store::new(rt.engine(), ctx_b);
 
     let wasmtime_instance_b = linker_b

@@ -92,6 +92,9 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 /// Internal state for a running instance.
 /// The Store is !Send, so we wrap it in Arc<Mutex> for async access.
+///
+/// Note: This is public for advanced use cases (e.g., custom system components),
+/// but most users should use `Runtime::instantiate()` instead.
 pub struct InstanceState {
     pub component_id: ComponentId,
     pub store: Store<ExorunCtx>,
@@ -117,14 +120,27 @@ pub struct Runtime {
 
 impl Runtime {
     /// Creates a new runtime with default engine configuration.
-    pub fn new() -> Result<Self> {
+    pub fn new() -> Result<Arc<Self>> {
         let mut config = wasmtime::Config::new();
         config.async_support(true);
         config.wasm_component_model(true);
 
         let engine = Engine::new(&config).map_err(Error::Engine)?;
 
-        Ok(Self {
+        Ok(Arc::new(Self {
+            engine,
+            components: DashMap::new(),
+            peers: DashMap::new(),
+            instances: DashMap::new(),
+            next_component_id: AtomicU64::new(1),
+            next_peer_id: AtomicU64::new(1),
+            next_instance_id: AtomicU64::new(1),
+        }))
+    }
+
+    /// Creates a new runtime with a custom engine configuration.
+    pub fn with_engine(engine: Engine) -> Arc<Self> {
+        Arc::new(Self {
             engine,
             components: DashMap::new(),
             peers: DashMap::new(),
@@ -133,19 +149,6 @@ impl Runtime {
             next_peer_id: AtomicU64::new(1),
             next_instance_id: AtomicU64::new(1),
         })
-    }
-
-    /// Creates a new runtime with a custom engine configuration.
-    pub fn with_engine(engine: Engine) -> Self {
-        Self {
-            engine,
-            components: DashMap::new(),
-            peers: DashMap::new(),
-            instances: DashMap::new(),
-            next_component_id: AtomicU64::new(1),
-            next_peer_id: AtomicU64::new(1),
-            next_instance_id: AtomicU64::new(1),
-        }
     }
 
     /// Returns a reference to the wasmtime Engine.
@@ -179,13 +182,20 @@ impl Runtime {
     }
 
     /// Registers an instance and returns its unique ID.
+    ///
+    /// Note: This is public for advanced use cases (e.g., custom system components),
+    /// but most users should use `Runtime::instantiate()` instead.
     pub fn add_instance(&self, state: InstanceState) -> InstanceId {
         let id = InstanceId(self.next_instance_id.fetch_add(1, Ordering::Relaxed));
         self.instances.insert(id, Arc::new(Mutex::new(state)));
         id
     }
 
-
+    /// Creates an instance builder for the given component.
+    /// This is the primary way to instantiate components.
+    pub fn instantiate(self: &Arc<Self>, component_id: ComponentId) -> crate::local::InstanceBuilder {
+        crate::local::InstanceBuilder::new(Arc::clone(self), component_id)
+    }
 
     /// Calls an exported function on an instance.
     pub async fn call(
