@@ -25,19 +25,24 @@ use crate::peer::Peer;
 use crate::peer::PeerInstance;
 use crate::context::ExorunCtx;
 
-/// Strong type for application identifiers.
+/// Strong type for component identifiers.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct ComponentId(pub u64);
 
 impl std::fmt::Display for ComponentId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "app-{}", self.0)
+        write!(f, "component-{}", self.0)
     }
 }
 
 /// Strong type for peer identifiers.
+///
 /// Represents a stable logical identity for a remote peer, independent of
 /// network address or transport protocol.
+///
+/// The RPC stubs resolve PeerId → Peer on every call via [`Runtime::get_peer`],
+/// which would theoretically enable swapping transports by replacing the peer
+/// at the same id, though we don't currently have API for this.
 #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
 pub struct PeerId(pub u64);
 
@@ -68,7 +73,7 @@ impl std::fmt::Display for InstanceId {
 
 #[derive(Debug)]
 pub enum Error {
-    AppNotFound(ComponentId),
+    ComponentNotFound(ComponentId),
     PeerNotFound(PeerId),
     InstanceNotFound(InstanceId),
     Engine(wasmtime::Error),
@@ -78,7 +83,7 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::AppNotFound(id) => write!(f, "App not found: {}", id),
+            Self::ComponentNotFound(id) => write!(f, "Component not found: {}", id),
             Self::PeerNotFound(id) => write!(f, "Peer not found: {}", id),
             Self::InstanceNotFound(id) => write!(f, "Instance not found: {}", id),
             Self::Engine(e) => write!(f, "Engine error: {}", e),
@@ -106,7 +111,7 @@ pub struct InstanceState {
 /// The central runtime for managing Wasm components and their instances.
 ///
 /// Provides concurrent registration and lookup for:
-/// - Apps: Compiled Wasm components ready for instantiation
+/// - Components: Compiled Wasm components ready for instantiation
 /// - Peers: Remote connections identified by logical PeerId
 /// - Instances: Running component instances
 pub struct Runtime {
@@ -179,7 +184,7 @@ impl Runtime {
         self.components
             .get(&id)
             .map(|entry| entry.value().clone())
-            .ok_or(Error::AppNotFound(id))
+            .ok_or(Error::ComponentNotFound(id))
     }
 
     /// Registers an instance and returns its unique ID.

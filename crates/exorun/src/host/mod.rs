@@ -4,7 +4,7 @@
 //! to Wasm components through host-defined interfaces.
 //!
 //! Host components are organized as an exhaustive enum,
-//! with each variant implemented in its own module under `src/system/`.
+//! with each variant implemented in its own module under `src/host/`.
 
 pub mod instance;
 pub mod wasi;

@@ -111,12 +111,6 @@ impl InstanceBuilder {
         self
     }
 
-    // TODO: remove?
-    // pub fn context(mut self, f: impl FnOnce(&mut ContextBuilder)) -> Self {
-    //     f(&mut self.context_builder);
-    //     self
-    // }
-
     pub async fn build(mut self) -> Result<InstanceId> {
         let component = self.runtime.get_component(self.component_id)?;
         let ledger = crate::ledger::Ledger::from_component(&component)
