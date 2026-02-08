@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use wasmtime::component::Val;
 
-use exorun::peer::Peer;
+use exorun::peer::{Peer, PeerConfig};
 use exorun::runtime::Runtime;
 use exorun::host::HostInstance;
 use exorun::host::Wasi;
@@ -51,7 +51,7 @@ impl Transport for MockTransport {
 async fn test_peer_registration() {
     let runtime = Arc::new(Runtime::new().expect("Failed to create runtime"));
     let transport = Box::new(MockTransport);
-    let peer = Arc::new(Peer::new("test-peer", transport));
+    let peer = Arc::new(Peer::new("test-peer", transport, PeerConfig::default()));
     let _peer_id = runtime.add_peer(peer);
 }
 
@@ -247,7 +247,7 @@ async fn test_remote_peer_mock() {
     let rt = Runtime::new().expect("Failed to create runtime");
 
     let transport = Box::new(MathServiceTransport::new());
-    let peer = Arc::new(Peer::new("math-service", transport));
+    let peer = Arc::new(Peer::new("math-service", transport, PeerConfig::default()));
     let peer_id = rt.add_peer(peer);
 
     let app_id = rt

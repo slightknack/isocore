@@ -229,7 +229,7 @@ mod tests {
     use tokio::sync::Mutex;
 
     use super::*;
-    use crate::peer::Peer;
+    use crate::peer::{Peer, PeerConfig};
     use crate::runtime::Runtime;
     use crate::transport::Transport;
 
@@ -300,7 +300,7 @@ mod tests {
         // Create runtime and register peer
         let runtime = Arc::new(Runtime::with_engine(engine.clone()));
         let transport = Box::new(MockTransport::new());
-        let peer = Arc::new(Peer::new("test-peer", transport));
+        let peer = Arc::new(Peer::new("test-peer", transport, PeerConfig::default()));
         let peer_id = runtime.add_peer(peer);
 
         let mut linker = Linker::<ExorunCtx>::new(&engine);

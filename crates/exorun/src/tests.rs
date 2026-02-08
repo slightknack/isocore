@@ -17,7 +17,7 @@ use wasmtime::component::Type;
 use wasmtime::component::Val;
 
 use crate::peer;
-use crate::peer::Peer;
+use crate::peer::{Peer, PeerConfig};
 use crate::transport;
 use crate::transport::Transport;
 
@@ -239,7 +239,7 @@ impl Transport for MalformedTransport {
 #[tokio::test]
 async fn test_successful_ping_pong() {
     let transport = Box::new(PingPongTransport::new());
-    let peer = Peer::new("test-peer", transport);
+    let peer = Peer::new("test-peer", transport, PeerConfig::default());
 
     let args = vec![Val::String("ping".into())];
     let expected_types = vec![Type::String];
@@ -259,7 +259,7 @@ async fn test_successful_ping_pong() {
 #[tokio::test]
 async fn test_transport_error() {
     let transport = Box::new(TimeoutTransport);
-    let peer = Peer::new("test-peer", transport);
+    let peer = Peer::new("test-peer", transport, PeerConfig::default());
 
     let args = vec![Val::U32(42)];
     let expected_types = vec![Type::U32];
@@ -275,7 +275,7 @@ async fn test_transport_error() {
 #[tokio::test]
 async fn test_rpc_protocol_violation_call_frame() {
     let transport = Box::new(CallReturningTransport::new());
-    let peer = Peer::new("test-peer", transport);
+    let peer = Peer::new("test-peer", transport, PeerConfig::default());
 
     let args = vec![Val::U32(42)];
     let expected_types = vec![Type::U32];
@@ -292,7 +292,7 @@ async fn test_rpc_protocol_violation_call_frame() {
 #[tokio::test]
 async fn test_rpc_malformed_frame() {
     let transport = Box::new(MalformedTransport::new());
-    let peer = Peer::new("test-peer", transport);
+    let peer = Peer::new("test-peer", transport, PeerConfig::default());
 
     let args = vec![Val::U32(42)];
     let expected_types = vec![Type::U32];
@@ -309,7 +309,7 @@ async fn test_rpc_malformed_frame() {
 #[tokio::test]
 async fn test_remote_failure() {
     let transport = Box::new(FailureTransport::new());
-    let peer = Peer::new("test-peer", transport);
+    let peer = Peer::new("test-peer", transport, PeerConfig::default());
 
     let args = vec![Val::U32(42)];
     let expected_types = vec![Type::U32];
@@ -335,7 +335,7 @@ async fn test_concurrent_correlation() {
     let (server_tx, client_rx) = mpsc::unbounded_channel();
 
     let client_transport = Box::new(DuplexChannelTransport::new(client_tx, client_rx));
-    let peer = Arc::new(Peer::new("test-peer", client_transport));
+    let peer = Arc::new(Peer::new("test-peer", client_transport, PeerConfig::default()));
 
     // Spawn 10 concurrent peer tasks
     let mut tasks = Vec::new();
@@ -446,7 +446,7 @@ async fn test_failure_fidelity() {
     }
 
     let transport = Box::new(DomainErrorTransport::new());
-    let peer = Peer::new("test-peer", transport);
+    let peer = Peer::new("test-peer", transport, PeerConfig::default());
 
     let args = vec![Val::U32(1)];
     let result_types = vec![Type::U32];
