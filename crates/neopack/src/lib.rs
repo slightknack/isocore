@@ -869,6 +869,26 @@ impl<T: Unpack> Unpack for Vec<T> {
     }
 }
 
+impl Pack for () {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.unit() }
+}
+impl Unpack for () {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { dec.unit()?; Ok(()) }
+}
+
+impl<const N: usize> Pack for [u8; N] {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.bytes(self) }
+}
+impl<const N: usize> Unpack for [u8; N] {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> {
+        let b = dec.bytes()?;
+        if b.len() != N { return Err(Error::UnexpectedEnd); }
+        let mut arr = [0u8; N];
+        arr.copy_from_slice(b);
+        Ok(arr)
+    }
+}
+
 #[cfg(feature = "derive")]
 pub use neopack_derive::Pack;
 #[cfg(feature = "derive")]
