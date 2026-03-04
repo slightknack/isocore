@@ -1,21 +1,23 @@
-//! Derive macros for neopack `Pack` and `Unpack` traits.
+//! Derive macros for neopack's `Pack` and `Unpack` traits.
 //!
-//! ## Structs
+//! Instead of writing serialization code by hand,
+//! add `#[derive(Pack, Unpack)]` to your struct or enum.
 //!
-//! Named structs encode as a neopack List of fields in declaration order.
+//! Structs encode as a list of their fields:
 //!
 //! ```ignore
 //! #[derive(Pack, Unpack)]
 //! struct Point { x: f64, y: f64 }
 //! ```
 //!
-//! ## Enums
+//! Newtypes (single-field tuple structs) encode as their inner value directly:
 //!
-//! Each variant encodes as a neopack Variant with the variant name as the tag.
+//! ```ignore
+//! #[derive(Pack, Unpack)]
+//! struct UserId(u64);
+//! ```
 //!
-//! - **Unit**: payload is `unit()`
-//! - **Single field**: payload is the field directly
-//! - **Multiple fields**: payload is a List of fields
+//! Enums are tagged by variant name. Each variant can be unit, tuple, or struct:
 //!
 //! ```ignore
 //! #[derive(Pack, Unpack)]
@@ -26,10 +28,17 @@
 //! }
 //! ```
 //!
-//! ## Attributes
+//! Use `#[pack(bytes)]` on a `Vec<u8>` field to encode it as a
+//! byte blob rather than a list of individual bytes:
 //!
-//! `#[pack(bytes)]` on a `Vec<u8>` or `[u8; N]` field encodes as a byte blob
-//! instead of a list of u8 tags.
+//! ```ignore
+//! #[derive(Pack, Unpack)]
+//! struct Message {
+//!     topic: String,
+//!     #[pack(bytes)]
+//!     payload: Vec<u8>,
+//! }
+//! ```
 
 use proc_macro::TokenStream;
 use quote::quote;
