@@ -200,7 +200,7 @@ The `send-message` function will serialize the message, try to find a valid valu
 
 `ping` and `pong` are both short messages. If a `node` receives a message `ping` with `message-epoch` N it must respond `pong(N)` as quickly as possible. `heartbeat` is like `ping` but it does not expect a reply. As these messages are meant to measure realistic round-trip times, so it is recommended that the difficulty rules are followed.
 
-It is wise for a node to decide the max difficulty of other nodes it is willing to interact with; for example, a node running on a phone might decide not to communicate with a server node whose difficulty is above e.g. `10`, because each message would be too hard to send. A node should always pick `set-difficulty` equivalent to the maximum number of messages it is able to process to keep this value as low as possible. If a `node` expects abuse or spam, from another node, it may raise the difficulty level for that specific node. This difficulty may be asymmetrical; a client device is likely to set difficulty to zero. (Initial difficulty is communicated upon connection.)
+It is wise for a node to decide the max difficulty of other nodes it is willing to interact with; for example, a node running on a phone might decide not to communicate with a server node whose difficulty is above e.g. `10`, because each message would be too hard to send. A node should always pick `set-difficulty` equivalent to the maximum number of messages it is able to process to keep this value as low as possible. If a `node` expects abuse or spam, from another node, it may raise the difficulty level for that specific node. This difficulty may be asymmetrical; a client device is likely to set difficulty to zero. (Initial difficulty is communicated upon connection.) Difficulty may also be set per-peer; for example, you might choose that if your server node connects to your local node, that the bidirectional difficulty is always zero. Friends welcome, strangers knock.
 
 `node-update` is used to inform a peer node that this node may now have new reachability requirements. When a node receives this message, it may handle it with `node-update-merge`. One important thing to note is that messages are encrypted for a specific node: so while one node may in theory proxy for another, it can only do so if the originating node announces, in an epoch, that that proxy is a valid address; the proxy may then observe the size, volume, and metadata of messages, but may not inspect their contents. 
 
@@ -239,7 +239,7 @@ channel-append: func(channel: key-pair, event: list<u8>) -> channel-version;
 channel-get-range: func(channel: key-public, epoch: u64, count: u16) -> list<result<list<u8>>>;
 ```
 
-The root hash is calculated through the formation of an implicit 16-tree. The sequence of `leaf-events` is chunked into groups of 16; the last group may have between 1..=16 hashes. All hashes in each group are concatenated in order, then hashed. This produces a sequence of `channel-branch` about 16x shorter. This process is repeated, by chunking the hashes of each `channel-branch`, until a single root `channel-branch` is formed. The `branch-id` hash of this root branch becomes the channel's root hash. This `root-hash` is then signed by the key-holder, and a new `channel-version` may be announced.
+The root hash is calculated through the formation of an implicit 16-tree. The sequence of `leaf-events` is chunked into groups of 16; the last group may have between 1..=16 hashes. All hashes in each group are concatenated in order, then hashed. This produces a sequence of `channel-branch` about 16x shorter. This process is repeated, by chunking the hashes of each `channel-branch`, until a single root `channel-branch` is formed. The `branch-id` hash of this root branch becomes the channel's root hash. This `root-hash` is then signed by the key-holder, and a new `channel-version` may be announced. Implementations should do this in an incremental manner; only recomputing the spine when a new batch of events is added.
 
 Note, The `event-id` is computed by hashing the `contents` of the event, not including `channel-id` or `event-epoch`. The `leaf-events` are just hashes, because `channel-id` and `event-epoch` are implicit in `channel-version` based on the position in the 16-tree. This content-addressed approach leads to natural deduplication.
 
@@ -297,7 +297,7 @@ If the ending packed block is `00` or `10`, it must specify the exact remaining 
 
 ### 3.3.2 Sync flow
 
-This section describes, to a first order, how synchronization may be implemented. In future revisions of Isocore this flow may be updated. Implementations are also free to optimize the exact ordering and priority of sent events, etc. and choosing which events to prioritize if the needed event set is very big, as long as they interoperate consistently with nodes that follow this exact default sync flow.
+This section describes, to a first order, how synchronization may be implemented. In future revisions of Isocore, this flow may be updated. Implementations are also free to optimize the exact ordering and priority of sent events, etc. and choosing which events to prioritize if the needed event set is very big, as long as they interoperate consistently with nodes that follow this exact default sync flow.
 
 When a node becomes aware of a `channel-version`, it may request events from a peer node using the `channel-need` message. If the node would like to receive future events as they become available, it should send a `channel-subscribe` message before it sends `channel-need`. If a node believes that a more recent `channel-version` may be ready, it can send a `channel-need` message with zero events needed. If a node would no longer like to automatically be sent future events, it should send a `channel-unsubscribe` in addition to an empty `channel-need`.
 
@@ -364,7 +364,7 @@ An interface is specified using a channel-version:
 
 ```wit
 record inter-version {
-    suggested: option<human-id>,
+    suggested-name: option<human-id>,
     contents: channel-version,
 }
 ```
@@ -402,11 +402,15 @@ A *Component* is a program that requires a set of Interfaces and provides implem
 
 ```wit
 record component-version {
-  suggested: option<human-id>,
+  suggested-name: option<human-id>,
   contents: channel-version,
   inter-required: list<inter-version>,
+  inter-provided: list<inter-version>,
+  config-schema: option<inter-version>,
 }
 ```
+
+
 
 TODO
 
@@ -419,6 +423,26 @@ In this section, we will discuss:
 - how compute and storage is managed
   - a node has strict compute and storage limits
   - these limits are allocated among applications
+
+# Node configuration
+
+On the spectrum from "dynamic smalltalk jungle" to "nix insect pinboard", Isocore leans much further in the nix direction. For this reason, the entire node configuration is defined in a single file, according to a WIT schema.
+
+```
+record config-node {
+  node-key: key-pair,
+  addresses: list<node-address>,
+  instances: list<config-instance>,  
+}
+
+record config-instance {
+
+}
+
+record config-host {
+  
+}
+```
 
 TODO
 
