@@ -17,6 +17,9 @@
 //! All integers are Little-Endian.
 
 #[cfg(test)]
+extern crate self as neopack;
+
+#[cfg(test)]
 mod tests;
 
 /// Neopack serialization and deserialization errors.
@@ -698,3 +701,175 @@ impl<'a> MapIter<'a> {
         Ok(Some((name, val)))
     }
 }
+
+/// Encode a value into a neopack byte stream.
+pub trait Pack {
+    fn pack(&self, enc: &mut Encoder) -> Result<()>;
+
+    fn pack_to_vec(&self) -> Result<Vec<u8>> {
+        let mut enc = Encoder::new();
+        self.pack(&mut enc)?;
+        enc.into_bytes()
+    }
+}
+
+/// Decode a value from a neopack byte stream.
+pub trait Unpack: Sized {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self>;
+
+    fn unpack_from_bytes(data: &[u8]) -> Result<Self> {
+        let mut dec = Decoder::new(data);
+        Self::unpack(&mut dec)
+    }
+}
+
+// ── Primitive impls ──
+
+impl<T: Pack + ?Sized> Pack for &T {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { (**self).pack(enc) }
+}
+
+impl Pack for bool {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.bool(*self) }
+}
+impl Unpack for bool {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { dec.bool() }
+}
+
+impl Pack for u8 {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.u8(*self) }
+}
+impl Unpack for u8 {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { dec.u8() }
+}
+
+impl Pack for u16 {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.u16(*self) }
+}
+impl Unpack for u16 {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { dec.u16() }
+}
+
+impl Pack for u32 {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.u32(*self) }
+}
+impl Unpack for u32 {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { dec.u32() }
+}
+
+impl Pack for u64 {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.u64(*self) }
+}
+impl Unpack for u64 {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { dec.u64() }
+}
+
+impl Pack for i8 {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.s8(*self) }
+}
+impl Unpack for i8 {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { dec.s8() }
+}
+
+impl Pack for i16 {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.s16(*self) }
+}
+impl Unpack for i16 {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { dec.s16() }
+}
+
+impl Pack for i32 {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.s32(*self) }
+}
+impl Unpack for i32 {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { dec.s32() }
+}
+
+impl Pack for i64 {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.s64(*self) }
+}
+impl Unpack for i64 {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { dec.s64() }
+}
+
+impl Pack for f32 {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.f32(*self) }
+}
+impl Unpack for f32 {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { dec.f32() }
+}
+
+impl Pack for f64 {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.f64(*self) }
+}
+impl Unpack for f64 {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { dec.f64() }
+}
+
+impl Pack for str {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.str(self) }
+}
+
+impl Pack for String {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> { enc.str(self) }
+}
+impl Unpack for String {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> { Ok(dec.str()?.to_string()) }
+}
+
+impl<T: Pack> Pack for Option<T> {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> {
+        match self {
+            Some(v) => { enc.option_some_begin()?; v.pack(enc)?; enc.option_some_end() }
+            None => enc.option_none(),
+        }
+    }
+}
+impl<T: Unpack> Unpack for Option<T> {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> {
+        match dec.option()? {
+            Some(mut inner) => Ok(Some(T::unpack(&mut inner)?)),
+            None => Ok(None),
+        }
+    }
+}
+
+impl<T: Pack, E: Pack> Pack for std::result::Result<T, E> {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> {
+        match self {
+            Ok(v) => { enc.result_ok_begin()?; v.pack(enc)?; enc.result_ok_end() }
+            Err(e) => { enc.result_err_begin()?; e.pack(enc)?; enc.result_err_end() }
+        }
+    }
+}
+impl<T: Unpack, E: Unpack> Unpack for std::result::Result<T, E> {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> {
+        match dec.result()? {
+            Ok(mut inner) => Ok(Ok(T::unpack(&mut inner)?)),
+            Err(mut inner) => Ok(Err(E::unpack(&mut inner)?)),
+        }
+    }
+}
+
+impl<T: Pack> Pack for Vec<T> {
+    fn pack(&self, enc: &mut Encoder) -> Result<()> {
+        enc.list_begin()?;
+        for item in self { item.pack(enc)?; }
+        enc.list_end()
+    }
+}
+impl<T: Unpack> Unpack for Vec<T> {
+    fn unpack(dec: &mut Decoder<'_>) -> Result<Self> {
+        let mut list = dec.list()?;
+        let mut items = Vec::new();
+        while let Some(mut item) = list.next() {
+            items.push(T::unpack(&mut item)?);
+        }
+        Ok(items)
+    }
+}
+
+#[cfg(feature = "derive")]
+pub use neopack_derive::Pack;
+#[cfg(feature = "derive")]
+pub use neopack_derive::Unpack;

@@ -636,3 +636,99 @@ fn test_trailing_data_in_item_decoder() -> Result<()> {
     assert!(item_dec.u32().is_err());
     Ok(())
 }
+
+// ── Derive macro tests ──
+
+#[derive(Debug, PartialEq, Pack, Unpack)]
+struct Point { x: f64, y: f64 }
+
+#[test]
+fn derive_struct_roundtrip() -> Result<()> {
+    let p = Point { x: 1.5, y: -3.0 };
+    let bytes = p.pack_to_vec()?;
+    let p2 = Point::unpack_from_bytes(&bytes)?;
+    assert_eq!(p, p2);
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Pack, Unpack)]
+enum Shape {
+    Empty,
+    Circle(f64),
+    Rect { w: f64, h: f64 },
+    Triangle(f64, f64, f64),
+}
+
+#[test]
+fn derive_enum_unit() -> Result<()> {
+    let s = Shape::Empty;
+    let bytes = s.pack_to_vec()?;
+    let s2 = Shape::unpack_from_bytes(&bytes)?;
+    assert_eq!(s, s2);
+    Ok(())
+}
+
+#[test]
+fn derive_enum_single_field() -> Result<()> {
+    let s = Shape::Circle(5.0);
+    let bytes = s.pack_to_vec()?;
+    let s2 = Shape::unpack_from_bytes(&bytes)?;
+    assert_eq!(s, s2);
+    Ok(())
+}
+
+#[test]
+fn derive_enum_named_fields() -> Result<()> {
+    let s = Shape::Rect { w: 3.0, h: 4.0 };
+    let bytes = s.pack_to_vec()?;
+    let s2 = Shape::unpack_from_bytes(&bytes)?;
+    assert_eq!(s, s2);
+    Ok(())
+}
+
+#[test]
+fn derive_enum_multi_unnamed() -> Result<()> {
+    let s = Shape::Triangle(3.0, 4.0, 5.0);
+    let bytes = s.pack_to_vec()?;
+    let s2 = Shape::unpack_from_bytes(&bytes)?;
+    assert_eq!(s, s2);
+    Ok(())
+}
+
+#[test]
+fn derive_enum_unknown_variant() {
+    // Encode a valid variant then corrupt the name.
+    let mut enc = Encoder::new();
+    enc.variant_begin("Hexagon").unwrap();
+    enc.unit().unwrap();
+    enc.variant_end().unwrap();
+    let bytes = enc.into_bytes().unwrap();
+    assert!(Shape::unpack_from_bytes(&bytes).is_err());
+}
+
+#[derive(Debug, PartialEq, Pack, Unpack)]
+struct Wrapper(u32);
+
+#[test]
+fn derive_newtype_struct() -> Result<()> {
+    let w = Wrapper(42);
+    let bytes = w.pack_to_vec()?;
+    let w2 = Wrapper::unpack_from_bytes(&bytes)?;
+    assert_eq!(w, w2);
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Pack, Unpack)]
+struct Nested {
+    label: String,
+    point: Point,
+}
+
+#[test]
+fn derive_nested_struct() -> Result<()> {
+    let n = Nested { label: "origin".to_string(), point: Point { x: 0.0, y: 0.0 } };
+    let bytes = n.pack_to_vec()?;
+    let n2 = Nested::unpack_from_bytes(&bytes)?;
+    assert_eq!(n, n2);
+    Ok(())
+}

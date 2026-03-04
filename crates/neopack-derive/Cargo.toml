@@ -1,0 +1,18 @@
+[package]
+name = "neopack-derive"
+version = "1.0.0"
+edition = "2024"
+description = "Derive macros for neopack Pack/Unpack traits"
+license = "MIT"
+repository = "https://github.com/slightknack/isocore"
+authors = ["Isaac Clayton (slightknack) <hi@isaac.sh>"]
+keywords = ["serialization", "binary", "tlv", "derive"]
+categories = ["encoding"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["derive"] }
+quote = "1"
+proc-macro2 = "1"

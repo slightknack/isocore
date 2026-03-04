@@ -1,6 +1,6 @@
 [package]
 name = "neopack"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 description = "neopack is a small, opinionated library for binary tlv serialization"
 license = "MIT"
@@ -9,4 +9,9 @@ authors = ["Isaac Clayton (slightknack) <hi@isaac.sh>"]
 keywords = ["serialization", "binary", "tlv", "no-std"]
 categories = ["encoding", "no-std::no-alloc"]
 
+[features]
+default = ["derive"]
+derive = ["dep:neopack-derive"]
+
 [dependencies]
+neopack-derive = { version = "1", path = "../neopack-derive", optional = true }
