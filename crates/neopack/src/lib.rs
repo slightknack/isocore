@@ -1,20 +1,28 @@
-//! # Neopack
+//! Neopack is a small binary serialization library.
 //!
-//! A distinctively simple, bounded, and schema-agnostic serialization library.
+//! Everything is encoded using a (nestable!) tag-length-value (TLV) format.
+//! a one-byte **tag** says what follows, an optional four-byte
+//! **length** says how big it is, then the **value** data follows.
+//! All integers are little-endian.
 //!
-//! ## Philosophy
+//! (Some notes for writing neopack encoders/decoders for your types by hand.)
+//! Encoding is explicit, you push values onto an [`Encoder`],
+//! then call [`Encoder::into_bytes`]. Decoding is zero-copy,
+//! a [`Decoder`] borrows the input slice and hands back references.
 //!
-//! - **TigerStyle**: Safety through simplicity and explicit state. No hidden buffers, no recursion limits.
-//! - **TLV Architecture**: `[Tag][Length?][Value]` structure enables safe skipping of unknown fields.
-//! - **Bounded**: Encoders track state explicitly. Decoders are zero-copy, bounds-checked views.
+//! Thankfully, for structs and enums, `#[derive(Pack, Unpack)]`
+//! (via `neopack-derive`) generates neopack implementations automatically.
 //!
-//! ## Format
+//! ```ignore
+//! use neopack::Pack;
+//! use neopack::Unpack;
 //!
-//! - **Scalars**: `[Tag: 1b][Data: N]`
-//! - **Blobs**: `[Tag: 1b][Len: 4b][Data: Len]`
-//! - **Containers**: `[Tag: 1b][Len: 4b][Body: Len]`
+//! #[derive(Pack, Unpack)]
+//! struct Point { x: i32, y: i32 }
 //!
-//! All integers are Little-Endian.
+//! let bytes = Point { x: 1, y: 2 }.pack_to_vec().unwrap();
+//! let point = Point::unpack_from_bytes(&bytes).unwrap();
+//! ```
 
 #[cfg(test)]
 extern crate self as neopack;
