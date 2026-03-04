@@ -1,7 +1,7 @@
 //! Neopack is a small binary serialization library.
 //!
 //! Everything is encoded using a (nestable!) tag-length-value (TLV) format.
-//! a one-byte **tag** says what follows, an optional four-byte
+//! A one-byte **tag** says what follows, an optional four-byte
 //! **length** says how big it is, then the **value** data follows.
 //! All integers are little-endian.
 //!

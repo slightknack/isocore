@@ -1111,7 +1111,19 @@ dependencies = [
 
 [[package]]
 name = "neopack"
-version = "1.0.0"
+version = "1.2.1"
+dependencies = [
+ "neopack-derive",
+]
+
+[[package]]
+name = "neopack-derive"
+version = "1.0.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "neorpc"
