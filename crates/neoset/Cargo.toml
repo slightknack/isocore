@@ -1,0 +1,10 @@
+[package]
+name = "neoset"
+version = "0.1.0"
+edition = "2024"
+description = "Compact RLE-encoded event sets for efficient peer sync"
+license = "MIT"
+repository = "https://github.com/slightknack/isocore"
+authors = ["Isaac Clayton (slightknack) <hi@isaac.sh>"]
+keywords = ["bitset", "rle", "sync", "event-set"]
+categories = ["data-structures", "encoding"]
