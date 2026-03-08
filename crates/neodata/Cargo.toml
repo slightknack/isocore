@@ -1,6 +1,6 @@
 [package]
 name = "neodata"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Streaming fixed-memory 16-ary merkle tree with backend-agnostic storage"
 license = "MIT"

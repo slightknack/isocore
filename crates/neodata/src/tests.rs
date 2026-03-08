@@ -460,3 +460,230 @@ fn prove_out_of_range_panics() {
     log.append(b"one").unwrap();
     let _ = log.prove(1);
 }
+
+// --- Diff tests ---
+
+use crate::diff::{self, NodeBlock};
+
+#[test]
+fn diff_empty_log() {
+    let log = MerkleLog::<MemStore, 4>::new(MemStore::new());
+    let nodes = diff::collect_needed_nodes(&log, |_| false).unwrap();
+    assert!(nodes.is_empty());
+
+    assert!(diff::verify_partial::<4>(
+        log.signable(), log.roots(), log.length(), &nodes, |_| None,
+    ));
+}
+
+#[test]
+fn diff_single_entry_subscriber_has_it() {
+    let mut log = MerkleLog::<MemStore, 4>::new(MemStore::new());
+    let h = log.append(b"hello").unwrap();
+    let nodes = diff::collect_needed_nodes(&log, |_| true).unwrap();
+    assert!(nodes.is_empty());
+
+    assert!(diff::verify_partial::<4>(
+        log.signable(), log.roots(), log.length(), &nodes, |seq| {
+            if seq == 0 { Some(h) } else { None }
+        },
+    ));
+}
+
+#[test]
+fn diff_single_entry_subscriber_missing() {
+    let mut log = MerkleLog::<MemStore, 4>::new(MemStore::new());
+    log.append(b"hello").unwrap();
+    let nodes = diff::collect_needed_nodes(&log, |_| false).unwrap();
+    // Single entry = single leaf, no internal nodes to send.
+    assert!(nodes.is_empty());
+}
+
+#[test]
+fn diff_complete_tree_all_missing() {
+    let mut log = MerkleLog::<MemStore, 4>::new(MemStore::new());
+    let mut leaf_hashes = Vec::new();
+    for i in 0..4u8 {
+        leaf_hashes.push(log.append(&[i]).unwrap());
+    }
+
+    let nodes = diff::collect_needed_nodes(&log, |_| false).unwrap();
+    // One internal node (the root with 4 children).
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].children.len(), 4);
+
+    // After sync, subscriber has all entries. Verify.
+    assert!(diff::verify_partial::<4>(
+        log.signable(), log.roots(), log.length(), &nodes,
+        |seq| Some(leaf_hashes[seq as usize]),
+    ));
+}
+
+#[test]
+fn diff_complete_tree_partial_missing() {
+    let mut log = MerkleLog::<MemStore, 4>::new(MemStore::new());
+    let mut leaf_hashes = Vec::new();
+    for i in 0..4u8 {
+        leaf_hashes.push(log.append(&[i]).unwrap());
+    }
+
+    // Subscriber has seqs 0 and 1, missing 2 and 3.
+    let nodes = diff::collect_needed_nodes(&log, |seq| seq < 2).unwrap();
+    assert_eq!(nodes.len(), 1);
+
+    // After sync, subscriber has all entries.
+    assert!(diff::verify_partial::<4>(
+        log.signable(), log.roots(), log.length(), &nodes,
+        |seq| Some(leaf_hashes[seq as usize]),
+    ));
+}
+
+#[test]
+fn diff_two_level_tree() {
+    // B=4, 16 entries = 4^2 = two levels.
+    let mut log = MerkleLog::<MemStore, 4>::new(MemStore::new());
+    let mut leaf_hashes = Vec::new();
+    for i in 0..16u8 {
+        leaf_hashes.push(log.append(&[i]).unwrap());
+    }
+    assert_eq!(log.roots().len(), 1);
+
+    // Subscriber missing seq 5 only.
+    let nodes = diff::collect_needed_nodes(&log, |seq| seq != 5).unwrap();
+    // Need: root (level 2) + child covering seqs 4-7 (level 1).
+    assert_eq!(nodes.len(), 2);
+    // First node is the root (top-down order).
+    assert_eq!(nodes[0].hash(), log.roots()[0]);
+
+    // After sync, subscriber has all entries. Verify.
+    assert!(diff::verify_partial::<4>(
+        log.signable(), log.roots(), log.length(), &nodes,
+        |seq| Some(leaf_hashes[seq as usize]),
+    ));
+}
+
+#[test]
+fn diff_subscriber_has_everything() {
+    let mut log = MerkleLog::<MemStore, 4>::new(MemStore::new());
+    let mut leaf_hashes = Vec::new();
+    for i in 0..16u8 {
+        leaf_hashes.push(log.append(&[i]).unwrap());
+    }
+
+    let nodes = diff::collect_needed_nodes(&log, |_| true).unwrap();
+    assert!(nodes.is_empty());
+
+    // Pure bottom-up verification (no proof nodes needed).
+    assert!(diff::verify_partial::<4>(
+        log.signable(), log.roots(), log.length(), &nodes,
+        |seq| Some(leaf_hashes[seq as usize]),
+    ));
+}
+
+#[test]
+fn diff_multiple_subtrees() {
+    // B=4, 5 entries = subtrees of sizes [4, 1] = 2 roots.
+    let mut log = MerkleLog::<MemStore, 4>::new(MemStore::new());
+    let mut leaf_hashes = Vec::new();
+    for i in 0..5u8 {
+        leaf_hashes.push(log.append(&[i]).unwrap());
+    }
+    assert_eq!(log.roots().len(), 2);
+
+    // Subscriber missing seq 2.
+    let nodes = diff::collect_needed_nodes(&log, |seq| seq != 2).unwrap();
+    // Need: root of first subtree (covers 0-3).
+    assert_eq!(nodes.len(), 1);
+
+    assert!(diff::verify_partial::<4>(
+        log.signable(), log.roots(), log.length(), &nodes,
+        |seq| Some(leaf_hashes[seq as usize]),
+    ));
+}
+
+#[test]
+fn diff_nodeblock_roundtrip() {
+    let children: Vec<[u8; 32]> = (0..4u8).map(|i| {
+        let mut h = [0u8; 32];
+        h[0] = i;
+        h
+    }).collect();
+
+    let block = NodeBlock { children: children.clone() };
+    let bytes = block.to_bytes();
+    assert_eq!(bytes.len(), 4 * 32);
+
+    let decoded = NodeBlock::from_bytes(&bytes, 4).unwrap();
+    assert_eq!(decoded.children, children);
+    assert_eq!(decoded.hash(), block.hash());
+}
+
+#[test]
+fn diff_nodeblock_bad_size_rejected() {
+    assert!(NodeBlock::from_bytes(&[0u8; 31], 4).is_none());
+    assert!(NodeBlock::from_bytes(&[0u8; 129], 4).is_none());
+}
+
+#[test]
+fn diff_verify_rejects_bad_signable() {
+    assert!(!diff::verify_partial::<4>([0xFF; 32], &[], 0, &[], |_| None));
+}
+
+#[test]
+fn diff_verify_rejects_tampered_leaf() {
+    let mut log = MerkleLog::<MemStore, 4>::new(MemStore::new());
+    let mut leaf_hashes = Vec::new();
+    for i in 0..4u8 {
+        leaf_hashes.push(log.append(&[i]).unwrap());
+    }
+
+    let nodes = diff::collect_needed_nodes(&log, |_| false).unwrap();
+
+    // Tamper with one leaf hash.
+    assert!(!diff::verify_partial::<4>(
+        log.signable(), log.roots(), log.length(), &nodes,
+        |seq| {
+            if seq == 2 { Some([0xFF; 32]) }
+            else { Some(leaf_hashes[seq as usize]) }
+        },
+    ));
+}
+
+#[test]
+fn diff_b16_tree() {
+    let mut log = MerkleLog::<MemStore, 16>::new(MemStore::new());
+    let mut leaf_hashes = Vec::new();
+    for i in 0..16u8 {
+        leaf_hashes.push(log.append(&[i]).unwrap());
+    }
+    assert_eq!(log.roots().len(), 1);
+
+    // Missing seq 7.
+    let nodes = diff::collect_needed_nodes(&log, |seq| seq != 7).unwrap();
+    assert_eq!(nodes.len(), 1);
+
+    assert!(diff::verify_partial::<16>(
+        log.signable(), log.roots(), log.length(), &nodes,
+        |seq| Some(leaf_hashes[seq as usize]),
+    ));
+}
+
+#[test]
+fn diff_b16_two_level() {
+    let mut log = MerkleLog::<MemStore, 16>::new(MemStore::new());
+    let mut leaf_hashes = Vec::new();
+    for i in 0..256u16 {
+        leaf_hashes.push(log.append(&i.to_le_bytes()).unwrap());
+    }
+    assert_eq!(log.roots().len(), 1);
+
+    // Missing seqs 100-103.
+    let nodes = diff::collect_needed_nodes(&log, |seq| !(100..104).contains(&seq)).unwrap();
+    // Root (16 children) + one child covering seqs 96-111.
+    assert_eq!(nodes.len(), 2);
+
+    assert!(diff::verify_partial::<16>(
+        log.signable(), log.roots(), log.length(), &nodes,
+        |seq| Some(leaf_hashes[seq as usize]),
+    ));
+}

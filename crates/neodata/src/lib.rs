@@ -21,6 +21,7 @@
 //! assert_eq!(log.length(), 1);
 //! ```
 
+pub mod diff;
 pub mod hash;
 pub mod log;
 pub mod proof;
@@ -29,6 +30,7 @@ pub mod store;
 #[cfg(test)]
 mod tests;
 
+pub use diff::{NodeBlock, collect_needed_nodes, verify_partial};
 pub use log::{MerkleLog, subtree_sizes};
 pub use proof::{Proof, ProofLevel, extract_siblings, reconstruct_children, verify};
 pub use store::{MemStore, Store};

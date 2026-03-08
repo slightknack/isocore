@@ -17,7 +17,7 @@ use crate::proof::{self, Proof, ProofLevel};
 use crate::store::Store;
 
 /// Serialize a branch node: concatenated 32-byte child hashes.
-fn serialize_branch(children: &[[u8; 32]]) -> Vec<u8> {
+pub(crate) fn serialize_branch(children: &[[u8; 32]]) -> Vec<u8> {
     let mut out = Vec::with_capacity(children.len() * 32);
     for child in children {
         out.extend_from_slice(child);
@@ -26,7 +26,7 @@ fn serialize_branch(children: &[[u8; 32]]) -> Vec<u8> {
 }
 
 /// Deserialize a branch node back into child hashes.
-fn deserialize_branch(data: &[u8], b: usize) -> Option<Vec<[u8; 32]>> {
+pub(crate) fn deserialize_branch(data: &[u8], b: usize) -> Option<Vec<[u8; 32]>> {
     if data.len() != b * 32 {
         return None;
     }
